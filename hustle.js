@@ -1,6 +1,15 @@
 /* ============================================================
    Hustle — command center logic
    ============================================================ */
+// Global error handler — log everything so we can debug, but don't let
+// any single error block the rest of the page from rendering.
+window.addEventListener('error', (e) => {
+  console.error('[hustle global error]', e.message, e.filename, e.lineno, e.error);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[hustle unhandled rejection]', e.reason);
+});
+
 (function () {
   'use strict';
 
@@ -135,9 +144,18 @@
     if (name === 'calendar') { renderCalendar(); }
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
-  tabBtns.forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  tabBtns.forEach(b => b.addEventListener('click', () => { try { setTab(b.dataset.tab); } catch (e) { console.error('setTab failed:', e); } }));
   const savedTab = get(KEYS.activeTab, 'overview');
-  setTab(['overview','calendar','globe','trading'].includes(savedTab) ? savedTab : 'overview');
+  try {
+    setTab(['overview','calendar','globe','trading'].includes(savedTab) ? savedTab : 'overview');
+  } catch (e) {
+    console.error('Initial setTab failed:', e);
+    // Fallback: force overview tab if any error
+    try {
+      tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === 'overview'));
+      sections.forEach(s => s.classList.toggle('active', s.id === 'sec-overview'));
+    } catch (e2) {}
+  }
 
   // ============================================================
   // BUSINESSES — CRUD + render
@@ -334,7 +352,8 @@
   }
 
   // ─── Add new business ─────────────────────────────────────
-  document.getElementById('bizAddBtn').addEventListener('click', () => {
+  const bizAddBtn = document.getElementById('bizAddBtn');
+  if (bizAddBtn) bizAddBtn.addEventListener('click', () => {
     const arr = loadBiz();
     const b = defaultBusiness();
     arr.push(b);
@@ -380,8 +399,9 @@
     drawerOverlay.classList.remove('open');
     drawerBizId = null;
   }
-  document.getElementById('drawerCloseBtn').addEventListener('click', closeDrawer);
-  drawerOverlay.addEventListener('click', e => {
+  const drawerCloseBtn = document.getElementById('drawerCloseBtn');
+  if (drawerCloseBtn) drawerCloseBtn.addEventListener('click', closeDrawer);
+  if (drawerOverlay) drawerOverlay.addEventListener('click', e => {
     if (e.target === drawerOverlay) closeDrawer();
   });
   drawerOverlay.querySelectorAll('.drawer-tab').forEach(t => {
@@ -660,29 +680,37 @@
     renderKPIs();
   }
 
-  document.getElementById('calPrev').addEventListener('click', () => {
+  const calPrevBtn = document.getElementById('calPrev');
+  const calNextBtn = document.getElementById('calNext');
+  const calTodayBtn = document.getElementById('calToday');
+  const calAddBtn = document.getElementById('calAddBtn');
+  if (calPrevBtn) calPrevBtn.addEventListener('click', () => {
     calCursor.m--; if (calCursor.m < 0) { calCursor.m = 11; calCursor.y--; }
     renderCalendar();
   });
-  document.getElementById('calNext').addEventListener('click', () => {
+  if (calNextBtn) calNextBtn.addEventListener('click', () => {
     calCursor.m++; if (calCursor.m > 11) { calCursor.m = 0; calCursor.y++; }
     renderCalendar();
   });
-  document.getElementById('calToday').addEventListener('click', () => {
+  if (calTodayBtn) calTodayBtn.addEventListener('click', () => {
     const now = new Date();
     calCursor = { y: now.getFullYear(), m: now.getMonth() };
     renderCalendar();
   });
-  document.getElementById('calAddBtn').addEventListener('click', () => {
-    const text = document.getElementById('calEvName').value.trim();
-    const date = document.getElementById('calEvDate').value;
-    const type = document.getElementById('calEvType').value;
+  if (calAddBtn) calAddBtn.addEventListener('click', () => {
+    const nameEl = document.getElementById('calEvName');
+    const dateEl = document.getElementById('calEvDate');
+    const typeEl = document.getElementById('calEvType');
+    if (!nameEl || !dateEl || !typeEl) return;
+    const text = nameEl.value.trim();
+    const date = dateEl.value;
+    const type = typeEl.value;
     if (!text || !date) return;
     const evs = loadEvents();
     evs.push({ id: uid(), text, date, type });
     saveEvents(evs);
-    document.getElementById('calEvName').value = '';
-    document.getElementById('calEvDate').value = '';
+    nameEl.value = '';
+    dateEl.value = '';
     renderCalendar();
     renderKPIs();
   });
@@ -694,97 +722,114 @@
   let globePoints = [];
   let globeRotateInterval = null;
 
+  function setHudStatus(text) {
+    const el = document.getElementById('hudStatus');
+    if (el) el.textContent = text;
+  }
+
   function initGlobeIfNeeded() {
-    if (globeInstance || !window.Globe) {
-      // Already up OR Globe lib hasn't loaded yet. Retry on next tick.
+    try {
+      if (globeInstance) return;
       if (!window.Globe) {
+        // Globe lib hasn't loaded yet. Retry on next tick.
         setTimeout(initGlobeIfNeeded, 250);
         return;
       }
-      return;
+      const stage = document.getElementById('globeCanvas');
+      if (!stage) return;
+      const apiKey = get(KEYS.newsKey, '');
+      showKeyBanner(!apiKey);
+
+      globeInstance = Globe()
+        .backgroundColor('rgba(0,0,0,0)')
+        .showAtmosphere(true)
+        .atmosphereColor('#7DD3FC')
+        .atmosphereAltitude(0.18)
+        .globeImageUrl('https://unpkg.com/three-globe@2.31.1/example/img/earth-night.jpg')
+        .bumpImageUrl('https://unpkg.com/three-globe@2.31.1/example/img/earth-topology.png')
+        .pointsData([])
+        .pointAltitude('alt')
+        .pointColor('color')
+        .pointRadius('radius')
+        .pointResolution(8)
+        .pointLabel(d => `<div style="background:rgba(11,12,24,0.92);color:#FAFAFA;padding:8px 12px;border-radius:8px;font-family:ui-monospace,monospace;font-size:11.5px;border:1px solid rgba(255,255,255,0.10);max-width:260px;line-height:1.4">
+          <div style="color:${d.color};font-size:9.5px;letter-spacing:0.16em;font-weight:800;margin-bottom:4px">${d.cat.toUpperCase()} · ${d.country}</div>
+          <div style="font-weight:600">${escapeHtml(d.title.slice(0, 110))}${d.title.length > 110 ? '…' : ''}</div>
+        </div>`)
+        .onPointClick(p => openGlobeDetail(p))
+        .ringsData([])
+        .ringColor(() => t => `rgba(125,211,252, ${1 - t})`)
+        .ringMaxRadius(4)
+        .ringPropagationSpeed(2)
+        .ringRepeatPeriod(1400)
+        (stage);
+
+      // Cinematic settings
+      try {
+        globeInstance.controls().autoRotate = true;
+        globeInstance.controls().autoRotateSpeed = 0.35;
+        globeInstance.controls().enableDamping = true;
+        globeInstance.controls().dampingFactor = 0.08;
+        globeInstance.controls().enableZoom = true;
+        globeInstance.controls().minDistance = 180;
+        globeInstance.controls().maxDistance = 600;
+      } catch (e) { console.error('globe controls failed', e); }
+
+      // Resize handling
+      function resize() {
+        try {
+          const w = stage.clientWidth;
+          const h = stage.clientHeight;
+          if (globeInstance && globeInstance.width) globeInstance.width(w).height(h);
+        } catch (e) {}
+      }
+      resize();
+      window.addEventListener('resize', resize);
+
+      // Track lat/lon under cursor for HUD
+      stage.addEventListener('mousemove', e => {
+        try {
+          const rect = stage.getBoundingClientRect();
+          const x = (e.clientX - rect.left) / rect.width * 2 - 1;
+          const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          const lat = (Math.asin(y * 0.9) * 180 / Math.PI).toFixed(2);
+          const lon = (x * 180).toFixed(2);
+          const hudCoord = document.getElementById('hudCoord');
+          if (hudCoord) hudCoord.textContent = `LAT ${lat}  LON ${lon}`;
+        } catch (e) {}
+      });
+
+      // Load cached news immediately so the globe doesn't sit empty
+      const cache = get(KEYS.newsCache, null);
+      if (cache && cache.events && cache.events.length) {
+        try { ingestNews(cache.events); } catch (e) { console.error('ingestNews cache failed', e); }
+        setHudStatus('CACHED · ' + new Date(cache.ts).toLocaleTimeString());
+      } else {
+        // No cache yet — show sample data so the globe is never empty,
+        // regardless of whether an API key is configured.
+        try { ingestNews(SAMPLE_NEWS); } catch (e) { console.error('ingestNews sample failed', e); }
+        setHudStatus(apiKey ? 'LOADING…' : 'SAMPLE FEED');
+      }
+      // Pull fresh data if a key is set
+      if (apiKey) fetchNews();
+    } catch (e) {
+      console.error('initGlobeIfNeeded failed:', e);
     }
-    const stage = document.getElementById('globeCanvas');
-    const apiKey = get(KEYS.newsKey, '');
-    showKeyBanner(!apiKey);
-
-    globeInstance = Globe()
-      .backgroundColor('rgba(0,0,0,0)')
-      .showAtmosphere(true)
-      .atmosphereColor('#7DD3FC')
-      .atmosphereAltitude(0.18)
-      .globeImageUrl('https://unpkg.com/three-globe@2.31.1/example/img/earth-night.jpg')
-      .bumpImageUrl('https://unpkg.com/three-globe@2.31.1/example/img/earth-topology.png')
-      .pointsData([])
-      .pointAltitude('alt')
-      .pointColor('color')
-      .pointRadius('radius')
-      .pointResolution(8)
-      .pointLabel(d => `<div style="background:rgba(11,12,24,0.92);color:#FAFAFA;padding:8px 12px;border-radius:8px;font-family:ui-monospace,monospace;font-size:11.5px;border:1px solid rgba(255,255,255,0.10);max-width:260px;line-height:1.4">
-        <div style="color:${d.color};font-size:9.5px;letter-spacing:0.16em;font-weight:800;margin-bottom:4px">${d.cat.toUpperCase()} · ${d.country}</div>
-        <div style="font-weight:600">${escapeHtml(d.title.slice(0, 110))}${d.title.length > 110 ? '…' : ''}</div>
-      </div>`)
-      .onPointClick(p => openGlobeDetail(p))
-      .ringsData([])
-      .ringColor(() => t => `rgba(125,211,252, ${1 - t})`)
-      .ringMaxRadius(4)
-      .ringPropagationSpeed(2)
-      .ringRepeatPeriod(1400)
-      (stage);
-
-    // Cinematic settings
-    globeInstance.controls().autoRotate = true;
-    globeInstance.controls().autoRotateSpeed = 0.35;
-    globeInstance.controls().enableDamping = true;
-    globeInstance.controls().dampingFactor = 0.08;
-    globeInstance.controls().enableZoom = true;
-    globeInstance.controls().minDistance = 180;
-    globeInstance.controls().maxDistance = 600;
-
-    // Resize handling
-    function resize() {
-      const w = stage.clientWidth;
-      const h = stage.clientHeight;
-      globeInstance.width(w).height(h);
-    }
-    resize();
-    window.addEventListener('resize', resize);
-
-    // Track lat/lon under cursor for HUD
-    stage.addEventListener('mousemove', e => {
-      const rect = stage.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width * 2 - 1;
-      const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      const lat = (Math.asin(y * 0.9) * 180 / Math.PI).toFixed(2);
-      const lon = (x * 180).toFixed(2);
-      document.getElementById('hudCoord').textContent = `LAT ${lat}  LON ${lon}`;
-    });
-
-    // Load cached news immediately so the globe doesn't sit empty
-    const cache = get(KEYS.newsCache, null);
-    if (cache && cache.events && cache.events.length) {
-      ingestNews(cache.events);
-      document.getElementById('hudStatus').textContent = 'CACHED · ' + new Date(cache.ts).toLocaleTimeString();
-    } else {
-      // No cache yet — show sample data so the globe is never empty,
-      // regardless of whether an API key is configured. The real news will
-      // replace it once fetchNews resolves.
-      ingestNews(SAMPLE_NEWS);
-      document.getElementById('hudStatus').textContent = apiKey ? 'LOADING…' : 'SAMPLE FEED';
-    }
-    // Pull fresh data if a key is set
-    if (apiKey) fetchNews();
   }
 
   function showKeyBanner(show) {
     const b = document.getElementById('globeKeyBanner');
     if (b) b.classList.toggle('hidden', !show);
   }
-  document.getElementById('globeKeySaveBtn').addEventListener('click', () => {
-    const v = document.getElementById('globeKeyInput').value.trim();
+  const globeKeySaveBtn = document.getElementById('globeKeySaveBtn');
+  if (globeKeySaveBtn) globeKeySaveBtn.addEventListener('click', () => {
+    const input = document.getElementById('globeKeyInput');
+    if (!input) return;
+    const v = input.value.trim();
     if (!v) return;
     set(KEYS.newsKey, v);
     showKeyBanner(false);
-    document.getElementById('hudStatus').textContent = 'CONNECTING…';
+    setHudStatus('CONNECTING…');
     fetchNews();
   });
   // Click HUD status or the edit-key link to re-open the banner
@@ -948,11 +993,13 @@
         .ringColor(d => t => d.color.replace(')', `,${(1 - t).toFixed(2)})`).replace('#', 'rgba(0,0,0,').replace(/^rgba\(0,0,0,([^,]+)$/, 'rgba(0,0,0,'+ '0' +')'));
     }
     renderGlobeFeed();
-    document.getElementById('hudEvents').textContent = String(globePoints.length);
+    const hudEvents = document.getElementById('hudEvents');
+    if (hudEvents) hudEvents.textContent = String(globePoints.length);
   }
 
   let globeCatFilter = 'all';
-  document.getElementById('globeCatRow').addEventListener('click', e => {
+  const globeCatRow = document.getElementById('globeCatRow');
+  if (globeCatRow) globeCatRow.addEventListener('click', e => {
     const btn = e.target.closest('.globe-cat');
     if (!btn) return;
     document.querySelectorAll('.globe-cat').forEach(b => b.classList.toggle('active', b === btn));
@@ -964,7 +1011,7 @@
     const count = document.getElementById('globeSideCount');
     if (!feed) return;
     const filtered = globeCatFilter === 'all' ? globePoints : globePoints.filter(p => p.cat === globeCatFilter);
-    count.textContent = filtered.length;
+    if (count) count.textContent = filtered.length;
     if (!filtered.length) {
       feed.innerHTML = `<div style="padding:24px 14px;font-size:12px;color:var(--text-tertiary);text-align:center;font-style:italic">No events in this category yet.</div>`;
       return;
@@ -1147,14 +1194,18 @@
     const tags = String(w.tags || '').toLowerCase();
     return inds.some(i => tags.indexOf(i.toLowerCase()) !== -1);
   }
-  document.getElementById('globeDetailClose').addEventListener('click', () => {
-    document.getElementById('globeDetailOverlay').classList.remove('open');
-  });
-  document.getElementById('globeDetailOverlay').addEventListener('click', e => {
-    if (e.target.id === 'globeDetailOverlay') {
-      document.getElementById('globeDetailOverlay').classList.remove('open');
-    }
-  });
+  const globeDetailClose = document.getElementById('globeDetailClose');
+  const globeDetailOverlay = document.getElementById('globeDetailOverlay');
+  if (globeDetailClose && globeDetailOverlay) {
+    globeDetailClose.addEventListener('click', () => {
+      globeDetailOverlay.classList.remove('open');
+    });
+    globeDetailOverlay.addEventListener('click', e => {
+      if (e.target.id === 'globeDetailOverlay') {
+        globeDetailOverlay.classList.remove('open');
+      }
+    });
+  }
 
   // ============================================================
   // TRADING — TradingView embeds + watchlist
@@ -1195,12 +1246,17 @@
     updateAISummary();
   }
 
-  document.getElementById('tradeGoBtn').addEventListener('click', loadSymbolFromInput);
-  document.getElementById('tradeSymbol').addEventListener('keydown', e => { if (e.key === 'Enter') loadSymbolFromInput(); });
+  const tradeGoBtn = document.getElementById('tradeGoBtn');
+  const tradeSymbolInput = document.getElementById('tradeSymbol');
+  if (tradeGoBtn) tradeGoBtn.addEventListener('click', loadSymbolFromInput);
+  if (tradeSymbolInput) tradeSymbolInput.addEventListener('keydown', e => { if (e.key === 'Enter') loadSymbolFromInput(); });
   function loadSymbolFromInput() {
-    const sym = document.getElementById('tradeSymbol').value.trim().toUpperCase();
+    const inputEl = document.getElementById('tradeSymbol');
+    if (!inputEl) return;
+    const sym = inputEl.value.trim().toUpperCase();
     if (!sym) return;
-    document.getElementById('tradeChart').src = chartFrameUrl(sym);
+    const chartEl = document.getElementById('tradeChart');
+    if (chartEl) chartEl.src = chartFrameUrl(sym);
   }
   document.querySelectorAll('.trade-quick[data-quick]').forEach(b => {
     b.addEventListener('click', () => {
@@ -1213,6 +1269,7 @@
   function renderWatchlist() {
     const list = document.getElementById('watchList');
     const count = document.getElementById('watchCount');
+    if (!list || !count) return;
     const arr = loadWatch();
     count.textContent = arr.length;
     if (!arr.length) {
@@ -1247,10 +1304,14 @@
       });
     });
   }
-  document.getElementById('watchAddBtn').addEventListener('click', addWatch);
-  document.getElementById('watchAddInput').addEventListener('keydown', e => { if (e.key === 'Enter') addWatch(); });
+  const watchAddBtn = document.getElementById('watchAddBtn');
+  const watchAddInput = document.getElementById('watchAddInput');
+  if (watchAddBtn) watchAddBtn.addEventListener('click', addWatch);
+  if (watchAddInput) watchAddInput.addEventListener('keydown', e => { if (e.key === 'Enter') addWatch(); });
   function addWatch() {
-    const v = document.getElementById('watchAddInput').value.trim().toUpperCase();
+    const inputEl = document.getElementById('watchAddInput');
+    if (!inputEl) return;
+    const v = inputEl.value.trim().toUpperCase();
     if (!v) return;
     const arr = loadWatch();
     if (arr.some(x => x.symbol === v)) {
@@ -1291,19 +1352,19 @@
   // ============================================================
   window.addEventListener('supabase-hydrated', () => {
     sessionStorage.setItem('sb_session_reloaded', '1');
-    renderBusinesses();
-    renderKPIs();
-    renderCalendar();
-    renderWatchlist();
-    renderGlobeFeed();
-    updateAISummary();
+    try { renderBusinesses(); } catch (e) { console.error('renderBusinesses failed:', e); }
+    try { renderKPIs(); } catch (e) { console.error('renderKPIs failed:', e); }
+    try { renderCalendar(); } catch (e) { console.error('renderCalendar failed:', e); }
+    try { renderWatchlist(); } catch (e) { console.error('renderWatchlist failed:', e); }
+    try { renderGlobeFeed(); } catch (e) { console.error('renderGlobeFeed failed:', e); }
+    try { updateAISummary(); } catch (e) { console.error('updateAISummary failed:', e); }
   });
 
   // ============================================================
-  // Initial paint
+  // Initial paint — wrapped so a single failure can't break the page
   // ============================================================
-  renderBusinesses();
-  renderKPIs();
-  renderCalendar();
+  try { renderBusinesses(); } catch (e) { console.error('renderBusinesses failed:', e); }
+  try { renderKPIs(); } catch (e) { console.error('renderKPIs failed:', e); }
+  try { renderCalendar(); } catch (e) { console.error('renderCalendar failed:', e); }
 
 })();
