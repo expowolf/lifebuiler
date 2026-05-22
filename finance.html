@@ -58,7 +58,6 @@ body::before {
     radial-gradient(60% 45% at 82% 14%, rgba(224, 118, 88, 0.16) 0%, transparent 55%),
     radial-gradient(55% 45% at 18% 90%, rgba(180, 180, 200, 0.06) 0%, transparent 55%),
     linear-gradient(180deg, #0A0A0B 0%, #050506 100%);
-  filter: blur(40px) saturate(1.05);
   pointer-events: none;
 }
 body::after {
@@ -66,6 +65,7 @@ body::after {
   position: fixed;
   inset: 0;
   z-index: -1;
+  display: none;
   background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
   background-size: 3px 3px;
   opacity: 0.7;
@@ -113,8 +113,8 @@ body::after {
   gap: 4px;
   padding: 8px max(12px, env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-right));
   background: linear-gradient(180deg, transparent, rgba(5,5,6,0.92) 30%);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .bottom-tabs::before {
   content: '';
@@ -210,8 +210,8 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   border-radius: var(--radius-lg);
   padding: 18px 20px;
   margin-bottom: 10px;
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow: var(--glass-shadow);
   position: relative;
   overflow: hidden;

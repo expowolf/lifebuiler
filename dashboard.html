@@ -39,29 +39,10 @@
     pointer-events: none;
     z-index: -2;
     background:
-      radial-gradient(circle at 82% 14%, rgba(224, 118, 88, 0.16), transparent 55%),
-      radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 55%);
-    filter: blur(40px);
-    animation: bg-drift 36s ease-in-out infinite alternate;
+      radial-gradient(circle at 82% 14%, rgba(224, 118, 88, 0.14), transparent 55%),
+      radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.05), transparent 55%);
   }
-
-  body::after {
-    content: '';
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: -1;
-    background-image:
-      radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-    background-size: 3px 3px;
-    opacity: 1;
-    mix-blend-mode: screen;
-  }
-
-  @keyframes bg-drift {
-    0% { transform: translate(0, 0); }
-    100% { transform: translate(-12px, 10px); }
-  }
+  /* Grain layer removed — it caused repaint thrash on mobile. */
 
   /* ========== Component 1: Page title ========== */
   .dash-header {
@@ -256,8 +237,8 @@
     background: rgba(255, 255, 255, 0.04);
     border-radius: 16px;
     padding: 20px;
-    backdrop-filter: blur(24px) saturate(1.2);
-    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     box-shadow: 0 12px 40px rgba(0,0,0,0.45);
     position: relative;
   }

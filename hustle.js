@@ -93,7 +93,17 @@
     if (tickerScroll) tickerScroll.innerHTML = items + items;
   }
   renderTicker();
-  setInterval(renderTicker, 4000);
+  let tickerTimer = setInterval(renderTicker, 4000);
+  // Pause expensive timers when the page is hidden
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (tickerTimer) { clearInterval(tickerTimer); tickerTimer = null; }
+      if (globeInstance && globeInstance.controls) globeInstance.controls().autoRotate = false;
+    } else {
+      if (!tickerTimer) tickerTimer = setInterval(renderTicker, 4000);
+      if (globeInstance && globeInstance.controls) globeInstance.controls().autoRotate = true;
+    }
+  });
 
   // ============================================================
   // TAB SWITCHING
@@ -465,14 +475,17 @@
   function loadEvents() { return get(KEYS.events, []); }
   function saveEvents(arr) { set(KEYS.events, arr); }
 
-  // Aggregated events = manual events + auto-generated from milestones
+  // Aggregated events = manual events + every dated thing across the app:
+  // hustle milestones, dashboard goals, subscription renewals, order arrivals.
   function allEvents() {
     const evs = loadEvents().map(e => ({ ...e, source: 'manual' }));
+
+    // 1. Business milestones (from Hustle)
     loadBiz().forEach(b => {
       (b.milestones || []).forEach(m => {
         if (!m.date || m.done) return;
         evs.push({
-          id: 'auto-' + m.id,
+          id: 'auto-mile-' + m.id,
           bizId: b.id,
           bizName: b.name,
           text: m.text,
@@ -482,6 +495,59 @@
         });
       });
     });
+
+    // 2. Dashboard goals (keys: goals:YYYY-MM-DD) — including today + tomorrow
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || k.indexOf('goals:') !== 0) continue;
+        const date = k.slice(6);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        const arr = JSON.parse(localStorage.getItem(k) || '[]');
+        arr.forEach((g, idx) => {
+          if (!g || !g.text) return;
+          evs.push({
+            id: 'auto-goal-' + date + '-' + idx,
+            text: g.text,
+            date,
+            type: 'goal',
+            source: 'goals',
+            done: !!g.done,
+          });
+        });
+      }
+    } catch (e) { /* ignore */ }
+
+    // 3. Subscription renewals
+    try {
+      const subs = JSON.parse(localStorage.getItem('subs') || '[]');
+      subs.forEach((s, idx) => {
+        if (!s || !s.renewal) return;
+        evs.push({
+          id: 'auto-sub-' + idx,
+          text: '↻ ' + (s.name || 'Subscription') + ' renews',
+          date: s.renewal,
+          type: 'financial',
+          source: 'subs',
+        });
+      });
+    } catch (e) { /* ignore */ }
+
+    // 4. Incoming orders (arrival dates)
+    try {
+      const orders = JSON.parse(localStorage.getItem('orders') || '[]');
+      orders.forEach((o, idx) => {
+        if (!o || !o.arrival) return;
+        evs.push({
+          id: 'auto-order-' + idx,
+          text: '📦 ' + (o.name || 'Order') + ' arrives',
+          date: o.arrival,
+          type: 'financial',
+          source: 'orders',
+        });
+      });
+    } catch (e) { /* ignore */ }
+
     return evs;
   }
   function renderCalendar() {
@@ -890,25 +956,90 @@
     });
   }
 
+  // ─── News fetching ─────────────────────────────────────────
+  // Supports both NewsAPI.org (32-char hex key) and NewsData.io (pub_ prefix).
+  // NewsAPI.org's free Developer plan blocks browser requests, so we route
+  // through a public CORS proxy when needed.
+  function detectNewsProvider(key) {
+    if (!key) return null;
+    if (/^pub_/.test(key)) return 'newsdata';
+    if (/^[a-f0-9]{32}$/i.test(key)) return 'newsapi';
+    return 'newsapi'; // default to NewsAPI.org for unknown formats
+  }
+  function normalizeNewsApiArticles(arr) {
+    // NewsAPI.org returns { source: { name }, author, title, description, url, urlToImage, publishedAt, content }
+    // No country field — we infer from title/description text.
+    return (arr || []).map((a, i) => ({
+      article_id: 'na' + i + '-' + (a.publishedAt || ''),
+      title: a.title || '',
+      description: a.description || '',
+      country: '',
+      category: [],
+      link: a.url || '#',
+      source_id: (a.source && a.source.name) || 'newsapi.org',
+      pubDate: a.publishedAt || new Date().toISOString(),
+    }));
+  }
+
   async function fetchNews() {
     const apiKey = get(KEYS.newsKey, '');
     if (!apiKey) return;
-    document.getElementById('hudStatus').textContent = 'STREAMING…';
+    const provider = detectNewsProvider(apiKey);
+    const status = document.getElementById('hudStatus');
+    status.textContent = 'STREAMING…';
+
     try {
-      const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data && data.results) {
-        ingestNews(data.results);
-        set(KEYS.newsCache, { ts: Date.now(), events: data.results.slice(0, 100) });
-        document.getElementById('hudStatus').textContent = 'LIVE · ' + new Date().toLocaleTimeString();
+      let articles = [];
+      if (provider === 'newsdata') {
+        const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data && data.results) articles = data.results;
+        else if (data && data.message) {
+          status.textContent = 'API: ' + String(data.message).slice(0, 30).toUpperCase();
+          return;
+        }
+      } else {
+        // NewsAPI.org. Try direct first; fall back to CORS proxy if blocked.
+        const queries = [
+          'https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=' + encodeURIComponent(apiKey),
+          'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology)&apiKey=' + encodeURIComponent(apiKey),
+        ];
+        let raw = null;
+        for (const q of queries) {
+          try {
+            const res = await fetch(q);
+            const data = await res.json();
+            if (data && data.status === 'ok' && Array.isArray(data.articles) && data.articles.length) {
+              raw = data.articles; break;
+            }
+            if (data && data.code === 'corsNotAllowed') break; // direct will never work, jump to proxy
+          } catch (e) { /* try next */ }
+        }
+        if (!raw) {
+          // CORS proxy fallback (free tier of NewsAPI.org blocks direct browser calls)
+          status.textContent = 'PROXYING…';
+          try {
+            const proxied = 'https://corsproxy.io/?' + encodeURIComponent('https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=' + apiKey);
+            const res = await fetch(proxied);
+            const data = await res.json();
+            if (data && data.status === 'ok' && Array.isArray(data.articles)) raw = data.articles;
+          } catch (e) { /* fall through */ }
+        }
+        if (raw) articles = normalizeNewsApiArticles(raw);
+      }
+
+      if (articles && articles.length) {
+        ingestNews(articles);
+        set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 100) });
+        status.textContent = 'LIVE · ' + new Date().toLocaleTimeString();
         updateAISummary();
-      } else if (data && data.message) {
-        document.getElementById('hudStatus').textContent = 'API: ' + String(data.message).slice(0, 30).toUpperCase();
+      } else {
+        status.textContent = provider === 'newsapi' ? 'NEWSAPI · CHECK KEY OR PLAN' : 'NO DATA';
       }
     } catch (e) {
       console.error('news fetch failed', e);
-      document.getElementById('hudStatus').textContent = 'OFFLINE';
+      status.textContent = 'OFFLINE';
     }
   }
   // Re-fetch every 5 minutes (NewsData free tier has rate limits)

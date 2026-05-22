@@ -32,42 +32,21 @@
   html, body { scrollbar-width: none; -ms-overflow-style: none; }
   *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
-  /* ===== Ambient backdrop ===== */
+  /* ===== Ambient backdrop (static gradient — no expensive filters) ===== */
   body::before {
     content: '';
-    position: fixed; inset: -15%;
+    position: fixed; inset: 0;
     background:
-      radial-gradient(40% 30% at 78% 12%, rgba(125,211,252,0.10), transparent 60%),
-      radial-gradient(45% 35% at 18% 88%, rgba(183,148,244,0.08), transparent 60%),
-      radial-gradient(50% 40% at 50% 50%, rgba(110,231,183,0.04), transparent 60%),
+      radial-gradient(40% 30% at 78% 12%, rgba(125,211,252,0.08), transparent 60%),
+      radial-gradient(45% 35% at 18% 88%, rgba(183,148,244,0.06), transparent 60%),
       linear-gradient(180deg, #050610 0%, #03040A 100%);
-    filter: blur(40px) saturate(1.15);
-    animation: ambient-drift 28s ease-in-out infinite alternate;
     pointer-events: none;
     z-index: -3;
   }
-  body::after {
-    content: '';
-    position: fixed; inset: 0;
-    background-image: radial-gradient(rgba(255,255,255,0.015) 1px, transparent 1px);
-    background-size: 3px 3px;
-    opacity: 0.7;
-    pointer-events: none;
-    z-index: -2;
-  }
-  @keyframes ambient-drift {
-    0%   { transform: translate(0,0)    scale(1);    }
-    100% { transform: translate(-12px, 10px) scale(1.03); }
-  }
-
-  /* Subtle scanline overlay for cinematic feel */
-  .scanlines {
-    position: fixed; inset: 0;
-    background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px);
-    pointer-events: none;
-    z-index: -1;
-    mix-blend-mode: screen;
-  }
+  /* Grain + scanlines removed — they triggered constant repaints and were
+     a major source of lag on mobile. The flat radial backdrop above keeps
+     the cinematic feel without the perf cost. */
+  .scanlines { display: none; }
 
   /* ===== Top bar ===== */
   .topbar {
@@ -75,8 +54,8 @@
     display: flex; align-items: center; gap: 16px;
     padding: 12px max(20px, env(safe-area-inset-left)) 12px max(20px, env(safe-area-inset-right));
     background: linear-gradient(180deg, rgba(5,6,16,0.92) 0%, rgba(5,6,16,0.70) 70%, transparent 100%);
-    backdrop-filter: blur(20px) saturate(1.2);
-    -webkit-backdrop-filter: blur(20px) saturate(1.2);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid rgba(255,255,255,0.04);
   }
   .brand {
@@ -206,8 +185,8 @@
     background: var(--bg-glass);
     border: 1px solid var(--border-soft);
     border-radius: 18px;
-    backdrop-filter: blur(28px) saturate(1.3);
-    -webkit-backdrop-filter: blur(28px) saturate(1.3);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     box-shadow:
       inset 0 1px 0 rgba(255,255,255,0.06),
       0 18px 50px rgba(0,0,0,0.45);
@@ -263,8 +242,8 @@
     background: var(--bg-glass);
     border: 1px solid var(--border-soft);
     border-radius: 14px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 12px 30px rgba(0,0,0,0.35);
     position: relative;
     overflow: hidden;
@@ -346,8 +325,8 @@
     border: 1px solid var(--border-soft);
     border-radius: 14px;
     padding: 18px 18px 16px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 12px 30px rgba(0,0,0,0.35);
     transition: transform 0.18s, border-color 0.18s, box-shadow 0.25s;
     cursor: pointer;
@@ -1010,8 +989,8 @@
     background: var(--bg-glass);
     border: 1px solid var(--border-soft);
     border-radius: 18px;
-    backdrop-filter: blur(28px) saturate(1.3);
-    -webkit-backdrop-filter: blur(28px) saturate(1.3);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 18px 50px rgba(0,0,0,0.45);
     display: flex; flex-direction: column;
     overflow: hidden;
@@ -1298,8 +1277,8 @@
     border: 1px solid var(--border-soft);
     border-radius: 16px;
     padding: 14px 16px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
   }
   .trade-card-h {
@@ -1451,6 +1430,22 @@
     .biz-section-h { flex-direction: column; align-items: stretch; }
     .drawer { max-width: 100%; }
     .add-miles-row { grid-template-columns: 1fr; }
+
+    /* PERF: drop heavy filters + animations on mobile */
+    .panel, .biz-kpi, .biz-card, .globe-side, .trade-chart-card, .trade-card {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    .brand-dot { animation: none; }
+    .ticker-scroll { animation-duration: 90s; }
+  }
+  /* Respect reduced-motion preferences */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0s !important;
+      animation-delay: 0s !important;
+      transition-duration: 0.01s !important;
+    }
   }
 </style>
 </head>
@@ -1552,10 +1547,10 @@
         </div>
         <div id="globeCanvas"></div>
         <div class="globe-key-banner hidden" id="globeKeyBanner">
-          <div class="globe-key-eyebrow">∎ NEWSDATA.IO REQUIRED</div>
+          <div class="globe-key-eyebrow">∎ NEWS API KEY REQUIRED</div>
           <div class="globe-key-title">Connect live intelligence</div>
-          <div class="globe-key-sub">Paste your NewsData.io API key to stream global events onto the globe in real time. Stored locally; never sent anywhere except newsdata.io.</div>
-          <input type="text" class="globe-key-input" id="globeKeyInput" placeholder="pub_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+          <div class="globe-key-sub">Paste your <b>NewsAPI.org</b> or <b>NewsData.io</b> key to stream global events onto the globe. Detected automatically. Stored locally; never sent anywhere except the news provider.</div>
+          <input type="text" class="globe-key-input" id="globeKeyInput" placeholder="NewsAPI.org key or pub_… for NewsData" />
           <button class="globe-key-btn" id="globeKeySaveBtn">Connect</button>
           <button class="globe-key-skip" id="globeKeySkipBtn">Skip — use sample feed</button>
         </div>

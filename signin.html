@@ -23,17 +23,8 @@
     inset: 0;
     z-index: -1;
     background:
-      radial-gradient(circle at 75% 20%, rgba(224, 118, 88, 0.18), transparent 55%),
-      radial-gradient(circle at 20% 85%, rgba(180, 180, 200, 0.07), transparent 55%);
-    filter: blur(40px);
-  }
-  body::after {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-    background-size: 3px 3px;
+      radial-gradient(circle at 75% 20%, rgba(224, 118, 88, 0.14), transparent 60%),
+      radial-gradient(circle at 20% 85%, rgba(180, 180, 200, 0.06), transparent 60%);
   }
   .card {
     width: 100%;
@@ -41,8 +32,6 @@
     background: rgba(255,255,255,0.04);
     border-radius: 20px;
     padding: 36px 28px;
-    backdrop-filter: blur(24px) saturate(1.2);
-    -webkit-backdrop-filter: blur(24px) saturate(1.2);
     box-shadow: 0 12px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08);
   }
   .title {
@@ -59,7 +48,7 @@
     font-size: 13px;
     color: #76746E;
     line-height: 1.5;
-    margin-bottom: 28px;
+    margin-bottom: 24px;
   }
   label {
     display: block;
@@ -69,8 +58,11 @@
     text-transform: uppercase;
     color: #76746E;
     margin-bottom: 8px;
+    margin-top: 14px;
   }
-  input[type="email"] {
+  label:first-of-type { margin-top: 0; }
+  input[type="email"],
+  input[type="password"] {
     width: 100%;
     padding: 13px 16px;
     background: rgba(255,255,255,0.06);
@@ -80,18 +72,15 @@
     font-size: 16px;
     font-family: inherit;
     outline: none;
-    margin-bottom: 12px;
     transition: border-color 0.2s, background 0.2s;
     -webkit-appearance: none;
   }
-  input[type="email"]:focus {
-    border-color: rgba(125,211,252,0.5);
-    background: rgba(255,255,255,0.08);
-  }
-  input[type="email"]::placeholder { color: #4D4B47; }
+  input:focus { border-color: rgba(125,211,252,0.5); background: rgba(255,255,255,0.08); }
+  input::placeholder { color: #4D4B47; }
   button.primary {
     width: 100%;
     padding: 14px;
+    margin-top: 18px;
     background: linear-gradient(180deg, #7DD3FC 0%, #5BB5E8 100%);
     color: #021018;
     font-size: 15px;
@@ -100,12 +89,11 @@
     border-radius: 12px;
     cursor: pointer;
     box-shadow: 0 4px 18px rgba(125,211,252,0.30), inset 0 1px 0 rgba(255,255,255,0.35);
-    transition: transform 0.15s, box-shadow 0.18s, filter 0.15s;
-    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.15s, filter 0.15s;
   }
-  button.primary:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 8px 24px rgba(125,211,252,0.40); }
+  button.primary:hover { filter: brightness(1.05); }
   button.primary:active { transform: scale(0.98); }
-  button.primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+  button.primary:disabled { opacity: 0.55; cursor: not-allowed; }
   .msg {
     margin-top: 14px;
     font-size: 13px;
@@ -116,39 +104,38 @@
   }
   .msg.success { color: #6BE3A4; }
   .msg.error   { color: #FF8A8A; }
-  .divider {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
-    margin: 24px 0 18px;
-  }
-  .sent-card {
-    display: none;
+  .switch-mode {
+    margin-top: 16px;
+    font-size: 12.5px;
+    color: #76746E;
     text-align: center;
   }
-  .sent-icon { font-size: 42px; margin-bottom: 14px; }
-  .sent-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
-  .sent-sub { font-size: 13px; color: #76746E; line-height: 1.6; }
-  .sent-email { color: #7DD3FC; font-weight: 600; }
+  .switch-mode a {
+    color: #7DD3FC;
+    text-decoration: none;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .switch-mode a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <div class="card">
-  <div id="formView">
-    <div class="title">Wolfgang's Dashboard</div>
-    <div class="subtitle">Enter your email to get a sign-in link. Works on any device — same email, same data.</div>
-    <label for="emailInput">Your email</label>
-    <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" inputmode="email" />
-    <button class="primary" id="sendBtn">Send sign-in link</button>
-    <div class="msg" id="msgEl"></div>
-  </div>
-  <div class="sent-card" id="sentView">
-    <div class="sent-icon">📬</div>
-    <div class="sent-title">Check your email</div>
-    <div class="sent-sub">
-      We sent a sign-in link to<br>
-      <span class="sent-email" id="sentEmail"></span><br><br>
-      Tap the link in the email to open your dashboard. It works on this device and any other device you use.
-    </div>
+  <div class="title">Wolfgang's Dashboard</div>
+  <div class="subtitle" id="subtitleEl">Sign in to sync your data across devices.</div>
+
+  <label for="emailInput">Email</label>
+  <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" inputmode="email" />
+
+  <label for="passwordInput">Password</label>
+  <input type="password" id="passwordInput" placeholder="••••••••" autocomplete="current-password" />
+
+  <button class="primary" id="submitBtn">Sign in</button>
+
+  <div class="msg" id="msgEl"></div>
+
+  <div class="switch-mode" id="switchEl">
+    Don't have an account? <a id="toggleMode">Create one</a>
   </div>
 </div>
 
@@ -159,56 +146,97 @@
   const SUPABASE_KEY = 'sb_publishable_6L-ExMekosUH-SotO-hlgg_WKNSKRpW';
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    auth: { persistSession: true, autoRefreshToken: true },
   });
 
-  // If already signed in, go straight to dashboard
+  // Already signed in? Skip to dashboard.
   const { data: { session } } = await supabase.auth.getSession();
-  if (session) {
-    window.location.replace('dashboard.html');
+  if (session) window.location.replace('dashboard.html');
+
+  const emailInput  = document.getElementById('emailInput');
+  const passInput   = document.getElementById('passwordInput');
+  const submitBtn   = document.getElementById('submitBtn');
+  const msgEl       = document.getElementById('msgEl');
+  const subtitleEl  = document.getElementById('subtitleEl');
+  const switchEl    = document.getElementById('switchEl');
+  const toggleLink  = document.getElementById('toggleMode');
+
+  let mode = 'signin'; // or 'signup'
+
+  function refreshUI() {
+    if (mode === 'signin') {
+      submitBtn.textContent = 'Sign in';
+      subtitleEl.textContent = 'Sign in to sync your data across devices.';
+      switchEl.innerHTML = `Don't have an account? <a id="toggleMode">Create one</a>`;
+      passInput.setAttribute('autocomplete', 'current-password');
+    } else {
+      submitBtn.textContent = 'Create account';
+      subtitleEl.textContent = 'Pick any email + password. Use the same on every device.';
+      switchEl.innerHTML = `Already have an account? <a id="toggleMode">Sign in</a>`;
+      passInput.setAttribute('autocomplete', 'new-password');
+    }
+    document.getElementById('toggleMode').addEventListener('click', () => {
+      mode = mode === 'signin' ? 'signup' : 'signin';
+      msgEl.textContent = '';
+      refreshUI();
+    });
   }
-
-  const emailInput = document.getElementById('emailInput');
-  const sendBtn    = document.getElementById('sendBtn');
-  const msgEl      = document.getElementById('msgEl');
-  const formView   = document.getElementById('formView');
-  const sentView   = document.getElementById('sentView');
-  const sentEmail  = document.getElementById('sentEmail');
-
+  refreshUI();
   emailInput.focus();
 
-  async function send() {
+  async function submit() {
     const email = emailInput.value.trim();
+    const password = passInput.value;
     if (!email || !email.includes('@')) {
-      msgEl.textContent = 'Please enter a valid email address.';
+      msgEl.textContent = 'Enter a valid email.';
       msgEl.className = 'msg error';
       return;
     }
-    sendBtn.disabled = true;
-    sendBtn.textContent = 'Sending…';
+    if (!password || password.length < 6) {
+      msgEl.textContent = 'Password must be at least 6 characters.';
+      msgEl.className = 'msg error';
+      return;
+    }
+    submitBtn.disabled = true;
+    const originalLabel = submitBtn.textContent;
+    submitBtn.textContent = mode === 'signin' ? 'Signing in…' : 'Creating account…';
     msgEl.textContent = '';
     msgEl.className = 'msg';
 
-    const redirectTo = window.location.origin + '/dashboard.html';
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo },
-    });
-
-    if (error) {
-      msgEl.textContent = error.message;
-      msgEl.className = 'msg error';
-      sendBtn.disabled = false;
-      sendBtn.textContent = 'Send sign-in link';
+    let res;
+    if (mode === 'signin') {
+      res = await supabase.auth.signInWithPassword({ email, password });
     } else {
-      formView.style.display = 'none';
-      sentEmail.textContent = email;
-      sentView.style.display = 'block';
+      res = await supabase.auth.signUp({ email, password });
     }
+
+    if (res.error) {
+      msgEl.textContent = res.error.message || 'Something went wrong.';
+      msgEl.className = 'msg error';
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
+      return;
+    }
+
+    if (mode === 'signup' && !res.data.session) {
+      // Email confirmation is enabled in Supabase — user needs to verify
+      msgEl.textContent = '✓ Account created. Check your email to confirm, then sign in.';
+      msgEl.className = 'msg success';
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
+      mode = 'signin';
+      refreshUI();
+      return;
+    }
+
+    msgEl.textContent = '✓ Signed in. Loading…';
+    msgEl.className = 'msg success';
+    setTimeout(() => window.location.replace('dashboard.html'), 200);
   }
 
-  sendBtn.addEventListener('click', send);
-  emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  submitBtn.addEventListener('click', submit);
+  passInput.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') passInput.focus(); });
 </script>
 </body>
 </html>
