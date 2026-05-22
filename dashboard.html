@@ -64,17 +64,52 @@
   }
 
   /* ========== Component 1: Page title ========== */
+  .dash-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
   .dash-title {
     font-size: 28px;
     font-weight: 700;
     letter-spacing: -0.025em;
-    margin: 0 0 14px 0;
+    margin: 0;
     background: linear-gradient(180deg, #FFFFFF 0%, #C7C4BC 120%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     color: transparent;
   }
+  .dash-finance-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: linear-gradient(135deg, rgba(110,231,183,0.10), rgba(125,211,252,0.08));
+    border: 1px solid rgba(110,231,183,0.22);
+    color: #BFE3F8;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-decoration: none;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    transition: transform 0.15s, background 0.18s, box-shadow 0.18s, border-color 0.18s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dash-finance-link:hover {
+    transform: translateY(-1px);
+    background: linear-gradient(135deg, rgba(110,231,183,0.18), rgba(125,211,252,0.14));
+    border-color: rgba(110,231,183,0.36);
+    box-shadow: 0 6px 18px rgba(110,231,183,0.18);
+  }
+  .dash-finance-link:active { transform: scale(0.97); }
+  .dash-finance-link .dash-finance-icon { font-size: 14px; line-height: 1; }
+  .dash-finance-link .dash-finance-arrow { opacity: 0.7; }
 
   /* ========== Component 2: Goal Ticker ========== */
   .ticker-row {
@@ -870,7 +905,14 @@
 </head>
 <body>
 
-<h1 class="dash-title">Wolfgang's Dashboard</h1>
+<div class="dash-header">
+  <h1 class="dash-title">Wolfgang's Dashboard</h1>
+  <a href="finance.html" class="dash-finance-link" aria-label="Open finances">
+    <span class="dash-finance-icon">💸</span>
+    <span>Finances</span>
+    <span class="dash-finance-arrow">→</span>
+  </a>
+</div>
 
 <!-- Component 2: Goal Ticker -->
 <div class="ticker-row">
