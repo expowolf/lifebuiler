@@ -1801,7 +1801,17 @@
   updateDayBar();
   setInterval(updateDayBar, 60 * 1000);
   startTicker();
+
+  window.addEventListener('supabase-hydrated', () => {
+    rollover();
+    processStreak();
+    loadToday();
+    loadTomorrow();
+    renderStreak();
+    window.dispatchEvent(new CustomEvent('goals-changed'));
+  });
 </script>
+<script src="supabase-sync.js" defer></script>
 
 </body>
 </html>

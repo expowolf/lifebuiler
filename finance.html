@@ -3373,8 +3373,17 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   safeRenderTicker();
   setInterval(safeRenderTicker, 1500);
 
+  window.addEventListener('supabase-hydrated', () => {
+    if (typeof renderAllNetWorth === 'function') renderAllNetWorth();
+    if (typeof renderSubs === 'function') renderSubs();
+    if (typeof renderOrders === 'function') renderOrders();
+    if (typeof renderWishlist === 'function') renderWishlist();
+    if (typeof safeRenderTicker === 'function') safeRenderTicker();
+  });
+
 })();
 </script>
+<script src="supabase-sync.js" defer></script>
 
 </body>
 </html>
