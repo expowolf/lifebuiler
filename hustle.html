@@ -1422,14 +1422,76 @@
      Mobile tweaks
      ============================================================ */
   @media (max-width: 720px) {
+    /* ===== Topbar & Navigation ===== */
     .topbar { gap: 8px; padding: 10px 14px; flex-wrap: wrap; }
-    .tabs { width: 100%; justify-content: space-around; }
-    .tab { padding: 7px 10px; font-size: 10.5px; }
-    .tab-icon { font-size: 12px; }
+    .brand { font-size: 11px; gap: 6px; }
+    .brand-name { font-size: 11px; }
     .brand-sub { display: none; }
-    .biz-section-h { flex-direction: column; align-items: stretch; }
-    .drawer { max-width: 100%; }
-    .add-miles-row { grid-template-columns: 1fr; }
+    .brand-dot { width: 6px; height: 6px; }
+    .tabs { width: 100%; justify-content: space-around; gap: 2px; }
+    .tab { padding: 10px 8px; font-size: 9.5px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+    .tab-icon { font-size: 14px; }
+
+    /* ===== Shell & Layout ===== */
+    .shell { padding: 12px max(12px, env(safe-area-inset-left)) 120px max(12px, env(safe-area-inset-right)); }
+
+    /* ===== Overview Section ===== */
+    .biz-section-h { flex-direction: column; align-items: stretch; gap: 12px; }
+    .biz-add-btn { padding: 10px 14px; font-size: 13px; min-height: 44px; }
+    .biz-kpi { padding: 14px; gap: 10px; }
+    .biz-kpi-label { font-size: 11px; }
+    .biz-kpi-value { font-size: 18px; }
+
+    /* ===== Business Cards ===== */
+    .biz-grid { grid-template-columns: 1fr; gap: 12px; }
+    .biz-card { padding: 14px; }
+    .biz-card-row { font-size: 12px; gap: 8px; }
+
+    /* ===== Calendar ===== */
+    .cal-add-row { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .cal-day { padding: 6px 5px 3px; }
+    .cal-event-pill { font-size: 8.5px; padding: 2px 4px; }
+    .cal-head { flex-direction: column; gap: 10px; }
+    .cal-nav { width: 100%; justify-content: space-between; }
+
+    /* ===== Globe Section ===== */
+    .globe-wrap { grid-template-columns: 1fr; gap: 0; height: auto; }
+    #globeStage { height: 360px; }
+    .globe-hud { font-size: 8.5px; }
+    .globe-hud-corner-tl { top: 10px; left: 10px; }
+    .globe-hud-corner-tr { top: 10px; right: 10px; }
+    .globe-hud-corner-bl { bottom: 10px; left: 10px; }
+    .globe-hud-corner-br { bottom: 10px; right: 10px; }
+    .globe-hud-line { font-size: 8px; line-height: 1.4; }
+
+    .globe-key-banner {
+      left: 10px; right: 10px; max-width: none;
+      padding: 16px 16px;
+      font-size: 13px;
+    }
+    .globe-key-title { font-size: 14px; }
+    .globe-key-sub { font-size: 11px; }
+    .globe-key-input { padding: 10px 12px; font-size: 12px; }
+    .globe-key-btn { padding: 12px; font-size: 13px; min-height: 44px; }
+
+    .globe-side { padding: 12px; }
+    .globe-cat { padding: 8px 10px; font-size: 10px; }
+    .globe-detail { max-width: calc(100vw - 28px); }
+
+    /* ===== Trading Section ===== */
+    .trade-card { padding: 12px; }
+    .trade-header { flex-direction: column; gap: 10px; }
+    .trade-input-group { flex-direction: column; }
+    .trade-input-group input { min-height: 44px; padding: 12px 14px; }
+    .trade-input-group button { min-height: 44px; padding: 12px; }
+    .trade-grid { grid-template-columns: 1fr; }
+
+    /* ===== Drawer ===== */
+    .drawer { max-width: 100%; padding: 16px 14px; }
+    .drawer-title { font-size: 16px; }
+    .drawer-section { padding: 12px 0; }
+    .add-miles-row { grid-template-columns: 1fr; gap: 8px; }
+    .add-miles-btn { min-height: 44px; padding: 10px; }
 
     /* PERF: drop heavy filters + animations on mobile */
     .panel, .biz-kpi, .biz-card, .globe-side, .trade-chart-card, .trade-card {
@@ -1438,6 +1500,18 @@
     }
     .brand-dot { animation: none; }
     .ticker-scroll { animation-duration: 90s; }
+  }
+
+  @media (max-width: 500px) {
+    /* Extra adjustments for very small phones */
+    .topbar { padding: 8px 12px; }
+    .shell { padding: 8px max(8px, env(safe-area-inset-left)) 120px max(8px, env(safe-area-inset-right)); }
+    .brand { font-size: 10px; }
+    .tab { padding: 8px 6px; font-size: 9px; }
+    .biz-kpi-value { font-size: 16px; }
+    .globe-hud { font-size: 7.5px; }
+    .globe-hud-line { font-size: 7px; }
+    .cal-add-row { grid-template-columns: 1fr; }
   }
   /* Respect reduced-motion preferences */
   @media (prefers-reduced-motion: reduce) {

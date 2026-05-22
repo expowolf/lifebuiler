@@ -869,18 +869,65 @@
   }
 
   /* Mobile tweaks */
+  @media (max-width: 720px) {
+    /* ===== Header & Navigation ===== */
+    body { padding: max(24px, env(safe-area-inset-top)) 16px 80px 16px; }
+    .dash-header { flex-direction: column; gap: 12px; margin-bottom: 12px; }
+    .dash-title { font-size: 24px; }
+    .dash-finance-link { width: 100%; justify-content: center; padding: 12px 16px; min-height: 44px; }
+
+    /* ===== Ticker ===== */
+    .ticker-row { gap: 8px; margin-bottom: 12px; }
+    .goal-ticker { padding: 10px 14px; gap: 12px; }
+    .goal-ticker-label { font-size: 9.5px; padding: 3px 8px; }
+    .goal-ticker-row { font-size: 13px; }
+    .goal-ticker-meta { font-size: 10px; padding: 3px 8px; }
+
+    /* ===== Day Ring ===== */
+    .day-ring-wrap { flex-direction: column; align-items: center; gap: 20px; padding: 16px 0; }
+    .day-ring-svg-wrap { width: 160px; height: 160px; }
+    .day-ring-percent { font-size: 38px; }
+    .day-ring-status { font-size: 14px; }
+    .day-ring-context { flex-direction: column; gap: 8px; }
+    .day-ring-item { flex-direction: row; gap: 8px; }
+    .day-ring-label { font-size: 12px; }
+    .day-ring-value { font-size: 16px; }
+
+    /* ===== Cards ===== */
+    .card { padding: 16px; margin-bottom: 12px; }
+    .gm-header { flex-direction: column; gap: 12px; }
+    .gm-header-left { flex-direction: column; gap: 8px; }
+    .gm-eyebrow { font-size: 11px; }
+    .gm-tomorrow-sub { font-size: 12px; }
+    .gm-progress-row { gap: 4px; font-size: 12px; }
+    .gm-progress-num { font-size: 32px; }
+
+    /* ===== Input Fields ===== */
+    .goal-input-wrap { flex-direction: column; gap: 8px; }
+    .gm-input { padding: 12px 14px; font-size: 14px; min-height: 44px; }
+    .gm-btn-primary { padding: 12px 16px; font-size: 13px; min-height: 44px; }
+    .gm-btn-secondary { padding: 12px 16px; font-size: 13px; min-height: 44px; }
+
+    /* ===== Goal List ===== */
+    .goal-item { padding: 12px 14px; gap: 10px; }
+    .goal-item-text { font-size: 14px; }
+    .goal-item-check { width: 20px; height: 20px; }
+
+    /* ===== Subs/Orders ===== */
+    .sub-item { padding: 12px 14px; flex-direction: column; gap: 8px; }
+    .sub-head { flex-direction: column; gap: 4px; }
+    .sub-date { font-size: 12px; }
+    .sub-amt { font-size: 13px; }
+  }
+
   @media (max-width: 480px) {
-    .dash-title { font-size: 22px; }
-    .goal-ticker { padding: 9px 12px; }
-    .goal-ticker-label { font-size: 9px; letter-spacing: 0.14em; }
-    .goal-ticker-row { font-size: 12px; }
-    .goal-ticker-meta { font-size: 10px; padding: 2px 7px; }
-    .day-ring-svg-wrap { width: 144px; height: 144px; }
+    body { padding: max(24px, env(safe-area-inset-top)) 12px 80px 12px; }
+    .dash-title { font-size: 20px; }
+    .card { padding: 14px; }
+    .day-ring-svg-wrap { width: 140px; height: 140px; }
     .day-ring-percent { font-size: 32px; }
-    .day-ring-status { font-size: 13px; }
-    body { padding-left: 16px; padding-right: 16px; }
-    .card { padding: 16px; }
-    .gm-progress-num { font-size: 36px; }
+    .gm-input { font-size: 13px; padding: 11px 12px; }
+    .goal-item-text { font-size: 13px; }
   }
 </style>
 </head>

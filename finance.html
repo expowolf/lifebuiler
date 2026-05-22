@@ -423,7 +423,31 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   gap: 10px;
 }
 @media (max-width: 720px) {
-  .section .card .card-grid { grid-template-columns: 1fr; }
+  body { padding: max(24px, env(safe-area-inset-top)) 16px 80px 16px; }
+  .section { margin-bottom: 14px; }
+  .section .card { padding: 16px; margin-bottom: 12px; }
+  .section .card .card-grid { grid-template-columns: 1fr; gap: 12px; }
+  .card-title { font-size: 14px; margin-bottom: 12px; }
+  .card-value { font-size: 24px; }
+  .card-label { font-size: 11px; }
+
+  /* ===== Input Fields ===== */
+  input[type="text"], input[type="number"], input[type="date"], select {
+    padding: 12px 14px !important;
+    font-size: 14px !important;
+    min-height: 44px !important;
+    border-radius: 10px !important;
+  }
+  button { min-height: 44px; padding: 12px 16px; font-size: 13px; }
+
+  /* ===== Add Buttons ===== */
+  .add-btn, .btn-add { padding: 12px 16px; font-size: 13px; min-height: 44px; width: 100%; }
+
+  /* ===== Subs/Orders/Wishlist Lists ===== */
+  .sub, .order, .wish { padding: 14px; gap: 10px; flex-direction: column; }
+  .sub-head { flex-direction: column; gap: 4px; }
+  .order-head { flex-direction: column; gap: 4px; }
+  .wish-head { flex-direction: column; gap: 4px; }
 }
 
 /* Stock-style net-worth chart */
