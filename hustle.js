@@ -1019,7 +1019,8 @@
     if (!apiKey) return;
     const provider = detectNewsProvider(apiKey);
     const status = document.getElementById('hudStatus');
-    status.textContent = 'STREAMING…';
+    const setStatus = (text) => { if (status) status.textContent = text; };
+    setStatus('STREAMING…');
 
     try {
       let articles = [];
@@ -1029,7 +1030,7 @@
         const data = await res.json();
         if (data && data.results) articles = data.results;
         else if (data && data.message) {
-          status.textContent = 'API: ' + String(data.message).slice(0, 30).toUpperCase();
+          setStatus('API: ' + String(data.message).slice(0, 30).toUpperCase());
           return;
         }
       } else {
@@ -1055,7 +1056,7 @@
         } catch (e) { /* CORS — proxies will handle */ }
         // Otherwise try each proxy
         if (!raw) {
-          status.textContent = 'PROXYING…';
+          setStatus('PROXYING…');
           for (const url of proxies) {
             try {
               const res = await fetch(url);
@@ -1069,20 +1070,20 @@
           }
         }
         if (raw) articles = normalizeNewsApiArticles(raw);
-        else if (lastError) status.textContent = 'NEWSAPI: ' + String(lastError).slice(0, 50).toUpperCase();
+        else if (lastError) setStatus('NEWSAPI: ' + String(lastError).slice(0, 50).toUpperCase());
       }
 
       if (articles && articles.length) {
         ingestNews(articles);
         set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 100) });
-        status.textContent = 'LIVE · ' + new Date().toLocaleTimeString();
+        setStatus('LIVE · ' + new Date().toLocaleTimeString());
         updateAISummary();
       } else {
-        status.textContent = provider === 'newsapi' ? 'NEWSAPI · CHECK KEY OR PLAN' : 'NO DATA';
+        setStatus(provider === 'newsapi' ? 'NEWSAPI · CHECK KEY OR PLAN' : 'NO DATA');
       }
     } catch (e) {
       console.error('news fetch failed', e);
-      status.textContent = 'OFFLINE';
+      setStatus('OFFLINE');
     }
   }
   // Re-fetch every 5 minutes (NewsData free tier has rate limits)
