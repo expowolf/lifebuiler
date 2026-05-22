@@ -314,7 +314,8 @@
         setStatus('error');
       }
     } else {
-      setStatus('signin');
+      // Not signed in — redirect to sign-in page
+      window.location.replace('signin.html');
     }
 
     if (pushTimer) { clearTimeout(pushTimer); doPush(); }
