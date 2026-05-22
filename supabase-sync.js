@@ -108,13 +108,41 @@
       .from(TABLE).select('data').eq('user_id', userId).maybeSingle();
     if (error) throw error;
     if (row && row.data && Object.keys(row.data).length) {
+      // Compare local vs remote BEFORE applying — if they differ, we
+      // need to either re-render or hard-reload so the UI catches up.
+      const beforeStr = JSON.stringify(sortedSnapshot(gather()));
       hydrating = true;
       applyRemote(row.data);
       hydrating = false;
-      window.dispatchEvent(new CustomEvent('supabase-hydrated'));
+      const afterStr = JSON.stringify(sortedSnapshot(gather()));
+
+      window.dispatchEvent(new CustomEvent('supabase-hydrated', {
+        detail: { changed: beforeStr !== afterStr },
+      }));
+
+      // Bulletproof fallback: if the page doesn't re-render itself
+      // within 600ms of hydration, force a one-time reload so the user
+      // actually sees their data. The session flag prevents loops.
+      if (beforeStr !== afterStr) {
+        const alreadyReloaded = sessionStorage.getItem('sb_session_reloaded') === '1';
+        if (!alreadyReloaded) {
+          setTimeout(() => {
+            if (sessionStorage.getItem('sb_session_reloaded') !== '1') {
+              sessionStorage.setItem('sb_session_reloaded', '1');
+              window.location.reload();
+            }
+          }, 600);
+        }
+      }
     } else {
       await doPush(); // seed the row with current local data
     }
+  }
+
+  function sortedSnapshot(obj) {
+    const out = {};
+    Object.keys(obj).sort().forEach(k => { out[k] = obj[k]; });
+    return out;
   }
 
   // ── status pill ────────────────────────────────────────────
@@ -236,26 +264,53 @@
   }
 
   function showUserModal() {
-    const email = supabase && supabase.auth
-      ? (supabase.auth.getSession ? '' : '')
-      : '';
     makeModal(`
       <div style="font-size:11px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:#76746E;margin-bottom:16px">Sync account</div>
       <div id="sb-user-email" style="font-size:13px;color:#B8B6B0;margin-bottom:20px;font-family:ui-monospace,monospace">Loading…</div>
+      <button id="sb-pull-btn" style="width:100%;padding:12px;background:linear-gradient(180deg,#7DD3FC,#5BB5E8);color:#021018;font-size:14px;font-weight:700;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px">↓ Pull latest from cloud</button>
+      <button id="sb-push-btn" style="width:100%;padding:11px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#FAFAFA;font-size:13px;font-weight:700;border-radius:10px;cursor:pointer;margin-bottom:14px">↑ Push my data to cloud</button>
+      <div id="sb-sync-msg" style="font-size:12px;color:#76746E;text-align:center;min-height:18px;margin-bottom:14px"></div>
       <button id="sb-signout-btn" style="width:100%;padding:11px;background:rgba(255,107,107,0.10);border:1px solid rgba(255,107,107,0.25);color:#FF8A8A;font-size:13px;font-weight:700;border-radius:10px;cursor:pointer;margin-bottom:8px">Sign out</button>
       <button id="sb-close-btn" style="width:100%;padding:11px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#B8B6B0;font-size:13px;font-weight:700;border-radius:10px;cursor:pointer">Close</button>
     `);
-    // fill in email async
     supabase.auth.getUser().then(({ data }) => {
       const el = document.getElementById('sb-user-email');
-      if (el && data && data.user) el.textContent = '● ' + (data.user.email || 'anonymous user');
+      if (el && data && data.user) el.textContent = '● ' + (data.user.email || 'signed in');
     });
+    const msg = document.getElementById('sb-sync-msg');
     document.getElementById('sb-close-btn').addEventListener('click', removeModal);
+    document.getElementById('sb-pull-btn').addEventListener('click', async () => {
+      msg.style.color = '#76746E';
+      msg.textContent = 'Pulling…';
+      try {
+        await fetchAndHydrate();
+        msg.style.color = '#6BE3A4';
+        msg.textContent = '✓ Pulled. Reloading…';
+        sessionStorage.removeItem('sb_session_reloaded');
+        setTimeout(() => window.location.reload(), 500);
+      } catch (e) {
+        msg.style.color = '#FF8A8A';
+        msg.textContent = 'Pull failed: ' + (e.message || e);
+      }
+    });
+    document.getElementById('sb-push-btn').addEventListener('click', async () => {
+      msg.style.color = '#76746E';
+      msg.textContent = 'Pushing…';
+      try {
+        await doPush();
+        msg.style.color = '#6BE3A4';
+        msg.textContent = '✓ Pushed everything on this device to the cloud.';
+      } catch (e) {
+        msg.style.color = '#FF8A8A';
+        msg.textContent = 'Push failed: ' + (e.message || e);
+      }
+    });
     document.getElementById('sb-signout-btn').addEventListener('click', async () => {
       await supabase.auth.signOut();
       userId = null;
-      setStatus('signin');
+      sessionStorage.removeItem('sb_session_reloaded');
       removeModal();
+      window.location.replace('signin.html');
     });
   }
 

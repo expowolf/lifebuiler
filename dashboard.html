@@ -1803,6 +1803,7 @@
   startTicker();
 
   window.addEventListener('supabase-hydrated', () => {
+    sessionStorage.setItem('sb_session_reloaded', '1');
     rollover();
     processStreak();
     loadToday();
