@@ -114,7 +114,23 @@
     tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     sections.forEach(s => s.classList.toggle('active', s.id === 'sec-' + name));
     set(KEYS.activeTab, name);
-    if (name === 'globe') { initGlobeIfNeeded(); }
+    if (name === 'globe') {
+      initGlobeIfNeeded();
+      // If the globe was already initialised, force it to re-sync its size
+      // and re-paint its points — when the section was display:none, the
+      // canvas can come back with stale dimensions / empty render.
+      if (globeInstance) {
+        setTimeout(() => {
+          const stage = document.getElementById('globeCanvas');
+          if (stage && globeInstance.width) {
+            globeInstance.width(stage.clientWidth).height(stage.clientHeight);
+          }
+          if (globePoints && globePoints.length) {
+            globeInstance.pointsData(globePoints.slice());
+          }
+        }, 50);
+      }
+    }
     if (name === 'trading') { ensureTradingLoaded(); }
     if (name === 'calendar') { renderCalendar(); }
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -748,10 +764,12 @@
     if (cache && cache.events && cache.events.length) {
       ingestNews(cache.events);
       document.getElementById('hudStatus').textContent = 'CACHED · ' + new Date(cache.ts).toLocaleTimeString();
-    } else if (!apiKey) {
-      // No key, no cache — show sample data so the globe feels alive.
+    } else {
+      // No cache yet — show sample data so the globe is never empty,
+      // regardless of whether an API key is configured. The real news will
+      // replace it once fetchNews resolves.
       ingestNews(SAMPLE_NEWS);
-      document.getElementById('hudStatus').textContent = 'SAMPLE FEED';
+      document.getElementById('hudStatus').textContent = apiKey ? 'LOADING…' : 'SAMPLE FEED';
     }
     // Pull fresh data if a key is set
     if (apiKey) fetchNews();
@@ -769,6 +787,20 @@
     document.getElementById('hudStatus').textContent = 'CONNECTING…';
     fetchNews();
   });
+  // Click HUD status or the edit-key link to re-open the banner
+  function reopenKeyBanner() {
+    const banner = document.getElementById('globeKeyBanner');
+    const input = document.getElementById('globeKeyInput');
+    if (banner && input) {
+      input.value = get(KEYS.newsKey, '');
+      banner.classList.remove('hidden');
+      setTimeout(() => input.focus(), 80);
+    }
+  }
+  const hudStatusEl = document.getElementById('hudStatus');
+  const hudEditEl = document.getElementById('hudEditKey');
+  if (hudStatusEl) hudStatusEl.addEventListener('click', reopenKeyBanner);
+  if (hudEditEl) hudEditEl.addEventListener('click', reopenKeyBanner);
   document.getElementById('globeKeySkipBtn').addEventListener('click', () => {
     showKeyBanner(false);
     ingestNews(SAMPLE_NEWS);
@@ -1000,33 +1032,43 @@
           return;
         }
       } else {
-        // NewsAPI.org. Try direct first; fall back to CORS proxy if blocked.
-        const queries = [
-          'https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=' + encodeURIComponent(apiKey),
-          'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology)&apiKey=' + encodeURIComponent(apiKey),
+        // NewsAPI.org. Free dev plan blocks direct browser calls so we go
+        // straight to a CORS proxy. /v2/everything is used (top-headlines
+        // requires a country/category param and is more limited).
+        const newsapiUrl = 'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology%20OR%20business)&apiKey=' + encodeURIComponent(apiKey);
+        const proxies = [
+          'https://corsproxy.io/?' + encodeURIComponent(newsapiUrl),
+          'https://api.allorigins.win/raw?url=' + encodeURIComponent(newsapiUrl),
         ];
         let raw = null;
-        for (const q of queries) {
-          try {
-            const res = await fetch(q);
-            const data = await res.json();
-            if (data && data.status === 'ok' && Array.isArray(data.articles) && data.articles.length) {
-              raw = data.articles; break;
-            }
-            if (data && data.code === 'corsNotAllowed') break; // direct will never work, jump to proxy
-          } catch (e) { /* try next */ }
-        }
+        let lastError = null;
+        // Try direct first (works if user has a paid plan)
+        try {
+          const res = await fetch(newsapiUrl);
+          const data = await res.json();
+          if (data && data.status === 'ok' && Array.isArray(data.articles) && data.articles.length) {
+            raw = data.articles;
+          } else if (data && data.message) {
+            lastError = data.message;
+          }
+        } catch (e) { /* CORS — proxies will handle */ }
+        // Otherwise try each proxy
         if (!raw) {
-          // CORS proxy fallback (free tier of NewsAPI.org blocks direct browser calls)
           status.textContent = 'PROXYING…';
-          try {
-            const proxied = 'https://corsproxy.io/?' + encodeURIComponent('https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=' + apiKey);
-            const res = await fetch(proxied);
-            const data = await res.json();
-            if (data && data.status === 'ok' && Array.isArray(data.articles)) raw = data.articles;
-          } catch (e) { /* fall through */ }
+          for (const url of proxies) {
+            try {
+              const res = await fetch(url);
+              const data = await res.json();
+              if (data && data.status === 'ok' && Array.isArray(data.articles) && data.articles.length) {
+                raw = data.articles; break;
+              } else if (data && data.message) {
+                lastError = data.message;
+              }
+            } catch (e) { /* try next */ }
+          }
         }
         if (raw) articles = normalizeNewsApiArticles(raw);
+        else if (lastError) status.textContent = 'NEWSAPI: ' + String(lastError).slice(0, 50).toUpperCase();
       }
 
       if (articles && articles.length) {
