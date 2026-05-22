@@ -1537,9 +1537,10 @@
           <span class="globe-hud-line" id="hudCoord">LAT 0.00  LON 0.00</span>
           <span class="globe-hud-line" id="hudUtc">UTC —</span>
         </div>
-        <div class="globe-hud globe-hud-corner-bl">
+        <div class="globe-hud globe-hud-corner-bl" style="pointer-events:auto">
           <span class="globe-hud-line">EVENTS LIVE · <span class="globe-hud-num" id="hudEvents">0</span></span>
-          <span class="globe-hud-line" id="hudStatus">STANDBY</span>
+          <span class="globe-hud-line" id="hudStatus" style="cursor:pointer" title="Click to edit API key">STANDBY</span>
+          <span class="globe-hud-line" id="hudEditKey" style="cursor:pointer;color:var(--accent-blue);margin-top:4px">⚙ EDIT API KEY</span>
         </div>
         <div class="globe-hud globe-hud-corner-br">
           <span class="globe-hud-line">DRAG · ROTATE</span>
