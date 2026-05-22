@@ -220,47 +220,9 @@
   }
 
   function showLoginModal() {
-    const box = makeModal(`
-      <div style="font-size:11px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:#76746E;margin-bottom:16px">Sign in to sync</div>
-      <div style="font-size:14px;color:#B8B6B0;line-height:1.5;margin-bottom:20px">
-        Enter your email — we'll send a magic link.<br>
-        Same email on any device = same data everywhere.
-      </div>
-      <input id="sb-email-input" type="email" placeholder="you@example.com" style="width:100%;padding:11px 14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#FAFAFA;font-size:15px;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:10px" />
-      <button id="sb-send-btn" style="width:100%;padding:12px;background:linear-gradient(180deg,#7DD3FC,#5BB5E8);color:#021018;font-size:14px;font-weight:700;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px">Send magic link</button>
-      <div id="sb-modal-msg" style="font-size:12px;color:#76746E;text-align:center;min-height:18px"></div>
-    `);
-    const input = box.querySelector('#sb-email-input');
-    const btn   = box.querySelector('#sb-send-btn');
-    const msg   = box.querySelector('#sb-modal-msg');
-    setTimeout(() => input && input.focus(), 60);
-
-    async function send() {
-      const email = input.value.trim();
-      if (!email || !email.includes('@')) { msg.textContent = 'Enter a valid email.'; return; }
-      btn.disabled = true;
-      btn.textContent = 'Sending…';
-      msg.textContent = '';
-      const redirectTo = window.location.origin + window.location.pathname;
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: redirectTo },
-      });
-      if (error) {
-        msg.style.color = '#FF8A8A';
-        msg.textContent = error.message;
-        btn.disabled = false;
-        btn.textContent = 'Send magic link';
-      } else {
-        msg.style.color = '#6BE3A4';
-        msg.textContent = '✓ Check your email and tap the link.';
-        btn.textContent = 'Sent!';
-        setStatus('sent');
-        setTimeout(removeModal, 3000);
-      }
-    }
-    btn.addEventListener('click', send);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+    // With email/password auth, the modal just redirects to the dedicated
+    // sign-in page — that's the only place credentials get entered.
+    window.location.replace('signin.html');
   }
 
   function showUserModal() {
@@ -330,30 +292,15 @@
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true, // handles magic-link redirect hash
+        detectSessionInUrl: false,
       },
     });
 
-    // Handle the magic link redirect: Supabase fires onAuthStateChange
-    // with SIGNED_IN right after it processes the URL hash.
-    supabase.auth.onAuthStateChange(async (event, session) => {
-      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
-        const newId = session.user.id;
-        if (newId !== userId) {
-          userId = newId;
-          setStatus('connecting');
-          try {
-            await fetchAndHydrate();
-            setStatus('synced');
-          } catch (e) {
-            console.error('[sync] hydrate after sign-in failed:', e);
-            setStatus('error');
-          }
-        }
-      }
+    supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
         userId = null;
-        setStatus('signin');
+        sessionStorage.removeItem('sb_session_reloaded');
+        window.location.replace('signin.html');
       }
     });
 
