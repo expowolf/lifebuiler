@@ -799,12 +799,13 @@
   }
   const hudStatusEl = document.getElementById('hudStatus');
   const hudEditEl = document.getElementById('hudEditKey');
+  const globeKeySkipBtn = document.getElementById('globeKeySkipBtn');
   if (hudStatusEl) hudStatusEl.addEventListener('click', reopenKeyBanner);
   if (hudEditEl) hudEditEl.addEventListener('click', reopenKeyBanner);
-  document.getElementById('globeKeySkipBtn').addEventListener('click', () => {
+  if (globeKeySkipBtn) globeKeySkipBtn.addEventListener('click', () => {
     showKeyBanner(false);
     ingestNews(SAMPLE_NEWS);
-    document.getElementById('hudStatus').textContent = 'SAMPLE FEED';
+    if (hudStatusEl) hudStatusEl.textContent = 'SAMPLE FEED';
   });
 
   // ─── Country → lat/lon mapping ──────────────────────────
