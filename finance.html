@@ -3374,6 +3374,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   setInterval(safeRenderTicker, 1500);
 
   window.addEventListener('supabase-hydrated', () => {
+    sessionStorage.setItem('sb_session_reloaded', '1');
     if (typeof renderAllNetWorth === 'function') renderAllNetWorth();
     if (typeof renderSubs === 'function') renderSubs();
     if (typeof renderOrders === 'function') renderOrders();
