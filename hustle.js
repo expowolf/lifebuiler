@@ -913,6 +913,141 @@ window.addEventListener('unhandledrejection', (e) => {
     kz:[48.02,66.92], kazakhstan:[48.02,66.92],
   };
 
+  // ── Sub-region database for granular location pinning ──────────
+  // Order matters: longer/more-specific names are tried first via
+  // sorted key iteration in locate(). Coordinates are city centers
+  // (or state capitals for US states).
+  const SUB_REGION_COORDS = {
+    // ─── US States (state capitals) ───
+    'alabama':[32.36,-86.28], 'alaska':[58.30,-134.42], 'arizona':[33.45,-112.07],
+    'arkansas':[34.74,-92.28], 'california':[38.58,-121.49], 'colorado':[39.74,-104.99],
+    'connecticut':[41.76,-72.67], 'delaware':[39.16,-75.52], 'florida':[30.44,-84.28],
+    'georgia':[33.75,-84.39], 'hawaii':[21.31,-157.86], 'idaho':[43.62,-116.20],
+    'illinois':[39.78,-89.65], 'indiana':[39.77,-86.16], 'iowa':[41.59,-93.62],
+    'kansas':[39.05,-95.69], 'kentucky':[38.20,-84.87], 'louisiana':[30.45,-91.14],
+    'maine':[44.31,-69.78], 'maryland':[38.97,-76.50], 'massachusetts':[42.36,-71.06],
+    'michigan':[42.73,-84.56], 'minnesota':[44.95,-93.10], 'mississippi':[32.30,-90.18],
+    'missouri':[38.58,-92.17], 'montana':[46.59,-112.04], 'nebraska':[40.81,-96.68],
+    'nevada':[39.16,-119.77], 'new hampshire':[43.21,-71.54], 'new jersey':[40.22,-74.76],
+    'new mexico':[35.69,-105.94], 'new york state':[42.65,-73.76], 'north carolina':[35.78,-78.64],
+    'north dakota':[46.81,-100.78], 'ohio':[39.96,-82.99], 'oklahoma':[35.49,-97.51],
+    'oregon':[44.93,-123.03], 'pennsylvania':[40.27,-76.88], 'rhode island':[41.83,-71.41],
+    'south carolina':[34.00,-81.03], 'south dakota':[44.37,-100.35], 'tennessee':[36.16,-86.78],
+    'texas':[30.27,-97.74], 'utah':[40.76,-111.89], 'vermont':[44.26,-72.58],
+    'virginia':[37.54,-77.43], 'washington state':[47.04,-122.90], 'west virginia':[38.34,-81.63],
+    'wisconsin':[43.07,-89.40], 'wyoming':[41.14,-104.82],
+
+    // ─── Major US Cities (some override state defaults for specificity) ───
+    'new york city':[40.71,-74.01], 'new york':[40.71,-74.01], 'nyc':[40.71,-74.01],
+    'los angeles':[34.05,-118.24], 'chicago':[41.88,-87.63], 'houston':[29.76,-95.37],
+    'phoenix':[33.45,-112.07], 'philadelphia':[39.95,-75.17], 'san antonio':[29.42,-98.49],
+    'san diego':[32.72,-117.16], 'dallas':[32.78,-96.80], 'austin':[30.27,-97.74],
+    'san francisco':[37.77,-122.42], 'san jose':[37.34,-121.89], 'seattle':[47.61,-122.33],
+    'denver':[39.74,-104.99], 'boston':[42.36,-71.06], 'detroit':[42.33,-83.05],
+    'miami':[25.76,-80.19], 'atlanta':[33.75,-84.39], 'washington dc':[38.91,-77.04],
+    'washington d.c.':[38.91,-77.04], 'd.c.':[38.91,-77.04],
+    'las vegas':[36.17,-115.14], 'portland':[45.51,-122.68], 'orlando':[28.54,-81.38],
+    'tampa':[27.95,-82.46], 'pittsburgh':[40.44,-79.99], 'cleveland':[41.50,-81.69],
+    'cincinnati':[39.10,-84.51], 'kansas city':[39.10,-94.58], 'st. louis':[38.63,-90.20],
+    'minneapolis':[44.98,-93.27], 'milwaukee':[43.04,-87.91], 'baltimore':[39.29,-76.61],
+    'charlotte':[35.23,-80.84], 'raleigh':[35.78,-78.64], 'nashville':[36.16,-86.78],
+    'memphis':[35.15,-90.05], 'new orleans':[29.95,-90.07], 'jacksonville':[30.33,-81.66],
+    'columbus':[39.96,-82.99], 'indianapolis':[39.77,-86.16], 'oklahoma city':[35.47,-97.52],
+    'albuquerque':[35.08,-106.65], 'tucson':[32.22,-110.93], 'fresno':[36.74,-119.79],
+    'sacramento':[38.58,-121.49], 'long beach':[33.77,-118.19], 'oakland':[37.80,-122.27],
+    'omaha':[41.26,-95.93], 'tulsa':[36.15,-95.99], 'wichita':[37.69,-97.34],
+    'buffalo':[42.89,-78.88], 'salt lake city':[40.76,-111.89], 'honolulu':[21.31,-157.86],
+
+    // ─── US Counties (high-profile ones often in news) ───
+    'maricopa county':[33.45,-112.07], 'los angeles county':[34.05,-118.24],
+    'cook county':[41.88,-87.63], 'harris county':[29.76,-95.37],
+    'fulton county':[33.75,-84.39], 'broward county':[26.12,-80.14],
+    'miami-dade county':[25.76,-80.19], 'orange county':[33.72,-117.83],
+    'san diego county':[32.72,-117.16], 'kings county':[40.65,-73.95],
+    'queens county':[40.73,-73.79], 'dallas county':[32.78,-96.80],
+    'tarrant county':[32.75,-97.33], 'wayne county':[42.33,-83.05],
+    'clark county':[36.17,-115.14], 'palm beach county':[26.71,-80.05],
+    'allegheny county':[40.44,-79.99], 'fairfax county':[38.85,-77.30],
+    'montgomery county':[39.14,-77.20], 'fulton':[33.75,-84.39],
+    'maricopa':[33.45,-112.07], 'cook':[41.88,-87.63],
+
+    // ─── Canadian Provinces & Cities ───
+    'ontario':[51.25,-85.32], 'quebec':[52.94,-73.55], 'british columbia':[53.73,-127.65],
+    'alberta':[53.93,-116.58], 'manitoba':[53.76,-98.81], 'saskatchewan':[52.94,-106.45],
+    'nova scotia':[44.68,-63.74], 'new brunswick':[46.57,-66.46], 'newfoundland':[53.13,-57.66],
+    'toronto':[43.65,-79.38], 'montreal':[45.50,-73.57], 'vancouver':[49.28,-123.12],
+    'calgary':[51.04,-114.07], 'edmonton':[53.55,-113.49], 'ottawa':[45.42,-75.69],
+    'winnipeg':[49.90,-97.14], 'quebec city':[46.81,-71.21], 'halifax':[44.65,-63.58],
+
+    // ─── UK & Ireland Cities ───
+    'london':[51.51,-0.13], 'manchester':[53.48,-2.24], 'birmingham':[52.49,-1.89],
+    'glasgow':[55.86,-4.25], 'edinburgh':[55.95,-3.19], 'liverpool':[53.41,-2.99],
+    'leeds':[53.80,-1.55], 'bristol':[51.45,-2.59], 'cardiff':[51.48,-3.18],
+    'belfast':[54.60,-5.93], 'dublin':[53.35,-6.26], 'cork':[51.90,-8.47],
+    'wales':[52.13,-3.78], 'scotland':[56.49,-4.20],
+
+    // ─── European Cities ───
+    'berlin':[52.52,13.40], 'munich':[48.14,11.58], 'hamburg':[53.55,9.99],
+    'frankfurt':[50.11,8.68], 'cologne':[50.94,6.96], 'paris':[48.86,2.35],
+    'lyon':[45.76,4.84], 'marseille':[43.30,5.37], 'madrid':[40.42,-3.70],
+    'barcelona':[41.39,2.17], 'rome':[41.90,12.50], 'milan':[45.46,9.19],
+    'naples':[40.85,14.27], 'amsterdam':[52.37,4.90], 'rotterdam':[51.92,4.48],
+    'brussels':[50.85,4.35], 'vienna':[48.21,16.37], 'zurich':[47.38,8.54],
+    'geneva':[46.20,6.15], 'stockholm':[59.33,18.07], 'oslo':[59.91,10.75],
+    'copenhagen':[55.68,12.57], 'helsinki':[60.17,24.94], 'warsaw':[52.23,21.01],
+    'prague':[50.08,14.44], 'budapest':[47.50,19.04], 'athens':[37.98,23.73],
+    'lisbon':[38.72,-9.14], 'dublin':[53.35,-6.26], 'kyiv':[50.45,30.52],
+    'kiev':[50.45,30.52], 'moscow':[55.76,37.62], 'st. petersburg':[59.93,30.34],
+
+    // ─── Middle East ───
+    'tel aviv':[32.08,34.78], 'jerusalem':[31.78,35.22], 'gaza':[31.50,34.47],
+    'beirut':[33.89,35.50], 'damascus':[33.51,36.29], 'baghdad':[33.31,44.36],
+    'tehran':[35.69,51.39], 'riyadh':[24.71,46.68], 'dubai':[25.20,55.27],
+    'abu dhabi':[24.45,54.38], 'doha':[25.29,51.53], 'kuwait city':[29.38,47.99],
+    'istanbul':[41.01,28.98], 'ankara':[39.93,32.86], 'cairo':[30.04,31.24],
+
+    // ─── Asia ───
+    'beijing':[39.90,116.41], 'shanghai':[31.23,121.47], 'shenzhen':[22.54,114.06],
+    'guangzhou':[23.13,113.26], 'hong kong':[22.32,114.17], 'taipei':[25.03,121.57],
+    'tokyo':[35.68,139.69], 'osaka':[34.69,135.50], 'kyoto':[35.01,135.77],
+    'seoul':[37.57,126.98], 'busan':[35.18,129.08], 'pyongyang':[39.04,125.76],
+    'singapore':[1.35,103.82], 'kuala lumpur':[3.14,101.69], 'bangkok':[13.76,100.50],
+    'manila':[14.60,120.98], 'jakarta':[-6.21,106.85], 'hanoi':[21.03,105.85],
+    'ho chi minh':[10.78,106.70], 'mumbai':[19.08,72.88], 'delhi':[28.61,77.21],
+    'new delhi':[28.61,77.21], 'bengaluru':[12.97,77.59], 'bangalore':[12.97,77.59],
+    'kolkata':[22.57,88.36], 'chennai':[13.08,80.27], 'karachi':[24.86,67.01],
+    'islamabad':[33.69,73.05], 'lahore':[31.55,74.34], 'dhaka':[23.81,90.41],
+
+    // ─── Africa ───
+    'lagos':[6.52,3.38], 'abuja':[9.06,7.50], 'nairobi':[-1.29,36.82],
+    'johannesburg':[-26.20,28.04], 'cape town':[-33.93,18.42], 'accra':[5.60,-0.19],
+    'addis ababa':[9.03,38.74],
+
+    // ─── Latin America ───
+    'mexico city':[19.43,-99.13], 'guadalajara':[20.66,-103.35], 'monterrey':[25.69,-100.32],
+    'são paulo':[-23.55,-46.63], 'sao paulo':[-23.55,-46.63], 'rio de janeiro':[-22.91,-43.17],
+    'brasilia':[-15.79,-47.88], 'buenos aires':[-34.61,-58.37], 'santiago':[-33.45,-70.67],
+    'lima':[-12.05,-77.04], 'bogota':[4.71,-74.07], 'caracas':[10.49,-66.88],
+    'havana':[23.13,-82.38],
+
+    // ─── Oceania ───
+    'sydney':[-33.87,151.21], 'melbourne':[-37.81,144.96], 'brisbane':[-27.47,153.03],
+    'perth':[-31.95,115.86], 'auckland':[-36.85,174.76], 'wellington':[-41.29,174.78],
+  };
+  // Pre-sort sub-region keys longest-first so "new york city" matches
+  // before "new york", "los angeles" before "los", etc.
+  const SUB_REGION_KEYS = Object.keys(SUB_REGION_COORDS)
+    .sort((a, b) => b.length - a.length);
+
+  function jitter(coords, seed) {
+    // Tiny offset so multiple stories at the same city don't perfectly overlap.
+    const s = (seed || 0) * 17 + 31;
+    return [
+      coords[0] + ((s % 13) - 6) * 0.05,
+      coords[1] + ((s % 17) - 8) * 0.05,
+    ];
+  }
+
   function categorize(item) {
     const txt = ((item.title || '') + ' ' + (item.description || '') + ' ' + (item.category || []).join(' ')).toLowerCase();
     if (/\b(war|missile|strike|invasion|attack|conflict|drone)\b/.test(txt)) return 'war';
@@ -924,20 +1059,40 @@ window.addEventListener('unhandledrejection', (e) => {
     if (/\b(climate|hurricane|flood|earthquake|wildfire|drought)\b/.test(txt)) return 'climate';
     return 'economy';
   }
-  function locate(item) {
-    const c = String(item.country || '').toLowerCase().trim();
-    if (c && COUNTRY_COORDS[c]) return COUNTRY_COORDS[c];
-    // Try to extract a known country name from the text
+  function titleCase(s) {
+    return s.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  // Returns { coords: [lat, lng], label: "City, Region" } so we can
+  // surface the actual matched place in the UI (not just the country).
+  function locate(item, idx) {
     const txt = ((item.title || '') + ' ' + (item.description || '')).toLowerCase();
+    const seed = (item.title || '').length + (idx || 0);
+
+    // 1. Most specific: try to match a sub-region (city/state/county) from the text.
+    // Longest names first so "new york city" beats "new york".
+    for (const name of SUB_REGION_KEYS) {
+      const re = new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+      if (re.test(txt)) {
+        return { coords: jitter(SUB_REGION_COORDS[name], seed), label: titleCase(name) };
+      }
+    }
+
+    // 2. Less specific: country code from the news provider's country field.
+    const c = String(item.country || '').toLowerCase().trim();
+    if (c && COUNTRY_COORDS[c]) {
+      return { coords: jitter(COUNTRY_COORDS[c], seed), label: c.toUpperCase() };
+    }
+
+    // 3. Country name in the text.
     for (const name of Object.keys(COUNTRY_COORDS)) {
       if (name.length < 3) continue;
       if (txt.indexOf(' ' + name + ' ') !== -1 || txt.indexOf(name + ',') !== -1) {
-        return COUNTRY_COORDS[name];
+        return { coords: jitter(COUNTRY_COORDS[name], seed), label: titleCase(name) };
       }
     }
-    // Final fallback: deterministic spread so multiple "global" stories don't pile on the same dot
-    const seed = (item.title || '').length;
-    return [((seed * 7) % 140) - 70, ((seed * 11) % 340) - 170];
+
+    // 4. Final fallback: deterministic spread so multiple "global" stories don't pile up.
+    return { coords: [((seed * 7) % 140) - 70, ((seed * 11) % 340) - 170], label: 'GLOBAL' };
   }
 
   const CAT_COLORS = {
@@ -969,15 +1124,19 @@ window.addEventListener('unhandledrejection', (e) => {
     if (!Array.isArray(arr)) arr = [];
     globePoints = arr.map((it, i) => {
       const cat = categorize(it);
-      const [lat, lng] = locate(it);
+      const loc = locate(it, i);
       return {
         id: it.article_id || it.id || ('n' + i),
-        lat, lng,
+        lat: loc.coords[0],
+        lng: loc.coords[1],
         alt: 0.01 + Math.random() * 0.03,
         radius: 0.5 + Math.random() * 0.5,
         color: CAT_COLORS[cat] || '#7DD3FC',
         cat,
-        country: (it.country || 'global').toUpperCase(),
+        // `country` is now actually the most specific region we matched
+        // (e.g. "New York City", "Texas", "Berlin") — keeps the UI label
+        // honest about where the pin is.
+        country: loc.label,
         title: it.title || 'Untitled',
         description: it.description || '',
         link: it.link || it.source_url || '#',
