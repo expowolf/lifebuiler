@@ -56,15 +56,15 @@
     }
     return out;
   }
+  // Non-destructive merge: remote values overwrite local for keys the
+  // remote has, but we NEVER delete local keys just because they're
+  // missing from remote — that race would wipe out data the user just
+  // typed while the debounced push was still in flight. The next push
+  // reconciles deletions; if the user truly deleted something on
+  // another device, they'll see it come back here once, and a re-delete
+  // will sync. Better than silent data loss.
   function applyRemote(data) {
     if (!data || typeof data !== 'object') return;
-    const remoteKeys = new Set(Object.keys(data));
-    const toRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (shouldSync(k) && !remoteKeys.has(k)) toRemove.push(k);
-    }
-    toRemove.forEach(k => _origRemove(k));
     Object.keys(data).forEach(k => { if (shouldSync(k)) _origSet(k, data[k]); });
   }
 
@@ -86,6 +86,52 @@
     _origRemove(k);
     if (shouldSync(k)) schedulePush();
   };
+
+  // Flush any pending debounced push synchronously when the page is
+  // about to be hidden or unloaded — otherwise a quick refresh after
+  // typing would lose the un-pushed change. We use sendBeacon so the
+  // request survives the navigation, with a regular upsert as the
+  // fallback for environments without beacon.
+  function flushPushSync() {
+    if (!pushTimer || !supabase || !userId) return;
+    clearTimeout(pushTimer); pushTimer = null;
+    try {
+      const body = JSON.stringify({
+        user_id: userId,
+        data: gather(),
+        updated_at: new Date().toISOString(),
+      });
+      // Supabase REST endpoint for upsert. The publishable key acts as
+      // both apikey and bearer for sendBeacon (no Authorization header
+      // possible). RLS still enforces user_id == auth.uid().
+      const url = `${SUPABASE_URL}/rest/v1/${TABLE}?on_conflict=user_id`;
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: 'application/json' });
+        navigator.sendBeacon(url + '&apikey=' + encodeURIComponent(SUPABASE_KEY), blob);
+      } else {
+        // Best-effort sync request — doPush() is async but the browser
+        // generally lets fetch with keepalive finish.
+        fetch(url, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body,
+          keepalive: true,
+        });
+      }
+    } catch (e) { /* nothing we can do at unload */ }
+  }
+  window.addEventListener('pagehide', flushPushSync);
+  window.addEventListener('beforeunload', flushPushSync);
+  // visibilitychange is the most reliable signal on mobile when
+  // switching tabs / locking the phone.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPushSync();
+  });
 
   async function doPush() {
     if (!supabase || !userId || hydrating) return;
