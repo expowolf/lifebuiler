@@ -1999,11 +1999,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   }
 
   // ============================================================
-  // STOCK PRICES — Yahoo Finance via CORS proxy. Cached 5 min.
-  // Prices stored in USD; converted to CHF via USD rate at render.
+  // STOCK PRICES — Yahoo v8/chart (primary) + Stooq CSV (fallback).
+  // Yahoo's v7/quote endpoint now demands an auth crumb so it 401s
+  // through any CORS proxy; v8/chart still works fine. Stooq is plain
+  // CSV with no auth — great safety net for US tickers.
   // ============================================================
   const STOCK_PRICE_KEY = 'nw:stockPrices';
   const STOCK_CACHE_MS = 5 * 60 * 1000; // 5 min
+  let stockFetchStatus = 'idle'; // idle | fetching | ok | error
   function loadStockPriceCache() {
     return storeGet(STOCK_PRICE_KEY) || { prices: {}, ts: 0 };
   }
@@ -2014,48 +2017,96 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     return (p && typeof p.price === 'number') ? p.price : null;
   }
   function getStockPriceChange(ticker) {
-    // Returns { pct, abs } if known, else null
     const c = loadStockPriceCache();
     const p = c.prices[String(ticker || '').toUpperCase()];
     if (!p || typeof p.pct !== 'number') return null;
     return { pct: p.pct, abs: p.abs || 0 };
   }
+  function setStockFetchStatus(s) {
+    stockFetchStatus = s;
+    const el = document.getElementById('stocksRefreshBtn');
+    if (!el) return;
+    if (s === 'fetching') el.textContent = '↻ Fetching prices…';
+    else if (s === 'error') el.textContent = '⚠ Refresh failed — retry';
+    else el.textContent = '↻ Refresh now';
+  }
+  async function fetchOneTickerYahoo(ticker) {
+    const sym = String(ticker || '').toUpperCase();
+    if (!sym) return null;
+    const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=2d`;
+    const urls = [
+      chartUrl, // try direct first (works on some networks)
+      'https://corsproxy.io/?' + encodeURIComponent(chartUrl),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(chartUrl),
+    ];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const j = await res.json();
+        const r = j && j.chart && j.chart.result && j.chart.result[0];
+        if (!r || !r.meta) continue;
+        const price = Number(r.meta.regularMarketPrice);
+        const prev = Number(r.meta.chartPreviousClose || r.meta.previousClose);
+        if (!isFinite(price) || price <= 0) continue;
+        const abs = isFinite(prev) ? (price - prev) : 0;
+        const pct = isFinite(prev) && prev > 0 ? (abs / prev) * 100 : 0;
+        return { sym, price, pct, abs, currency: r.meta.currency || 'USD' };
+      } catch (e) { /* try next */ }
+    }
+    return null;
+  }
+  async function fetchOneTickerStooq(ticker) {
+    // Stooq supports US tickers with `.us` suffix and returns CSV like:
+    // Symbol,Date,Time,Open,High,Low,Close,Volume
+    // AAPL.US,2026-05-22,22:00:00,170.10,172.50,169.80,172.40,52000000
+    const sym = String(ticker || '').toUpperCase();
+    if (!sym) return null;
+    const stooqSym = sym.includes('.') ? sym.toLowerCase() : (sym.toLowerCase() + '.us');
+    const url = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`;
+    const proxied = 'https://corsproxy.io/?' + encodeURIComponent(url);
+    try {
+      const res = await fetch(proxied);
+      if (!res.ok) return null;
+      const text = await res.text();
+      const lines = text.trim().split('\n');
+      if (lines.length < 2) return null;
+      const cols = lines[1].split(',');
+      const close = Number(cols[6]);
+      const open = Number(cols[3]);
+      if (!isFinite(close) || close <= 0) return null;
+      const abs = isFinite(open) ? (close - open) : 0;
+      const pct = isFinite(open) && open > 0 ? (abs / open) * 100 : 0;
+      return { sym, price: close, pct, abs, currency: 'USD' };
+    } catch (e) { return null; }
+  }
   async function fetchStockPrices(tickers, force) {
     if (!tickers || !tickers.length) return;
     const cache = loadStockPriceCache();
     if (!force && cache.ts && (Date.now() - cache.ts) < STOCK_CACHE_MS) return;
-    const symbols = tickers.map(t => String(t).toUpperCase()).filter(Boolean).join(',');
-    // Yahoo's v7/finance/quote returns price + regularMarketChangePercent.
-    // Browser CORS is blocked — go through corsproxy.io (already used for news).
-    const yahooUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
-    const proxies = [
-      'https://corsproxy.io/?' + encodeURIComponent(yahooUrl),
-      'https://api.allorigins.win/raw?url=' + encodeURIComponent(yahooUrl),
-    ];
-    let data = null;
-    for (const url of proxies) {
-      try {
-        const res = await fetch(url);
-        const j = await res.json();
-        if (j && j.quoteResponse && Array.isArray(j.quoteResponse.result)) {
-          data = j.quoteResponse.result;
-          break;
-        }
-      } catch (e) { /* try next proxy */ }
-    }
-    if (!data) return;
+    setStockFetchStatus('fetching');
+    const unique = Array.from(new Set(tickers.map(t => String(t).toUpperCase()).filter(Boolean)));
+    // Fetch all symbols in parallel. Yahoo first, then Stooq fallback.
+    const results = await Promise.all(unique.map(async (sym) => {
+      const yahoo = await fetchOneTickerYahoo(sym);
+      if (yahoo) return yahoo;
+      const stooq = await fetchOneTickerStooq(sym);
+      return stooq;
+    }));
     const next = { prices: { ...cache.prices }, ts: Date.now() };
-    data.forEach(q => {
-      const sym = (q.symbol || '').toUpperCase();
-      if (!sym) return;
-      next.prices[sym] = {
-        price: Number(q.regularMarketPrice) || 0,
-        pct: Number(q.regularMarketChangePercent) || 0,
-        abs: Number(q.regularMarketChange) || 0,
-        currency: q.currency || 'USD',
-      };
+    let gotAny = false;
+    results.forEach(r => {
+      if (!r) return;
+      gotAny = true;
+      next.prices[r.sym] = { price: r.price, pct: r.pct, abs: r.abs, currency: r.currency };
     });
-    saveStockPriceCache(next);
+    if (gotAny) {
+      saveStockPriceCache(next);
+      setStockFetchStatus('ok');
+    } else {
+      setStockFetchStatus('error');
+      console.error('[stocks] all price providers failed for', unique);
+    }
   }
   async function refreshAllStockPrices(force) {
     const items = storeGet('nw:stocks') || [];
@@ -2065,8 +2116,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     renderAllNetWorth();
   }
   // Stocks store either `{ name, ticker, shares }` (live-priced) or legacy
-  // `{ name, amount }` (manual CHF value). This helper returns the live
-  // CHF value of one stock item, falling back to amount if no ticker.
+  // `{ name, amount }` (manual CHF value). Returns the live CHF value.
   function stockItemValueCHF(it) {
     if (it && it.ticker && typeof it.shares === 'number') {
       const priceUSD = getStockPriceUSD(it.ticker);
@@ -2075,7 +2125,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         const valueUSD = priceUSD * it.shares;
         return valueUSD / usdPerCHF; // CHF
       }
-      // No price yet — return 0 so totals stay honest while loading
+      // Price not loaded yet — return 0 so totals stay honest while loading.
+      // The row UI will show '—' so the user knows it's pending, not broken.
       return 0;
     }
     return Number(it && it.amount) || 0;
@@ -2095,11 +2146,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       row.className = 'nw-row';
       const name = document.createElement('span');
       name.className = 'nw-name nw-name-edit';
-      // For stocks with a ticker, show: "Apple · AAPL · 10 sh @ $172.40 ▲1.2%"
+      // For stocks with a ticker, show: "AAPL · 10 sh @ $172.40 ▲1.2%"
       if (isStocks && it.ticker) {
         const priceUSD = getStockPriceUSD(it.ticker);
         const chg = getStockPriceChange(it.ticker);
-        const priceLabel = priceUSD != null ? '$' + priceUSD.toFixed(2) : '—';
+        const priceLabel = priceUSD != null
+          ? '$' + priceUSD.toFixed(2)
+          : '<span style="color:#F2C063">loading…</span>';
         const chgLabel = chg
           ? (chg.pct >= 0 ? ' <span style="color:#6EE7B7">▲' : ' <span style="color:#FF8A8A">▼')
             + Math.abs(chg.pct).toFixed(2) + '%</span>'
@@ -2115,11 +2168,19 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       name.addEventListener('click', () => beginNwNameEdit(name, items, idx, cat.key));
       const amt = document.createElement('span');
       amt.className = 'nw-amt nw-amt-edit';
-      amt.textContent = fmtMoney(valueCHF);
       if (isStocks && it.ticker) {
-        amt.title = 'Live price × shares. Tap name to rename, × to delete.';
-        // Disable amount-editing for live stocks; the value is computed.
+        const priceUSD = getStockPriceUSD(it.ticker);
+        if (priceUSD == null) {
+          amt.style.color = '#F2C063';
+          amt.textContent = '…';
+          amt.title = 'Fetching live price — refresh if stuck';
+        } else {
+          amt.textContent = fmtMoney(valueCHF);
+          amt.title = 'Live price × shares. Tap name to rename, × to delete.';
+        }
+        // No click-to-edit for live stocks; the value is computed.
       } else {
+        amt.textContent = fmtMoney(valueCHF);
         amt.title = 'Tap to edit · type +500 to add, -200 to subtract, or a new total';
         amt.addEventListener('click', () => beginNwAmountEdit(amt, items, idx, cat.key));
       }
