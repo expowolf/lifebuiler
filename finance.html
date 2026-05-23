@@ -1721,10 +1721,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         <div class="label" style="display:flex;justify-content:space-between;align-items:center"><span>📈 Stocks / Investments</span><span id="stocksTotal" style="font-size:13px;color:var(--text-primary);font-weight:600">0</span></div>
         <div id="stocksList" class="nw-list"></div>
         <div class="quick-add">
-          <input type="text" placeholder="Stock / fund" id="stocksName" />
-          <input type="number" placeholder="Value" id="stocksAmount" step="0.01" />
+          <input type="text" placeholder="Ticker (AAPL)" id="stocksTicker" style="text-transform:uppercase;flex:0 0 100px" />
+          <input type="number" placeholder="Shares" id="stocksAmount" step="0.0001" />
           <button class="quick-add-btn" id="stocksAddBtn">+</button>
         </div>
+        <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px;text-align:right">Prices refresh on load · <a href="#" id="stocksRefreshBtn" style="color:var(--accent-blue);text-decoration:none;font-weight:600">↻ Refresh now</a></div>
       </div>
       <!-- Crypto -->
       <div class="card nw-subcard">
@@ -1997,31 +1998,139 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     return symbol + ' ' + num.toLocaleString('en-US', { minimumFractionDigits: num % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 });
   }
 
+  // ============================================================
+  // STOCK PRICES — Yahoo Finance via CORS proxy. Cached 5 min.
+  // Prices stored in USD; converted to CHF via USD rate at render.
+  // ============================================================
+  const STOCK_PRICE_KEY = 'nw:stockPrices';
+  const STOCK_CACHE_MS = 5 * 60 * 1000; // 5 min
+  function loadStockPriceCache() {
+    return storeGet(STOCK_PRICE_KEY) || { prices: {}, ts: 0 };
+  }
+  function saveStockPriceCache(cache) { storeSet(STOCK_PRICE_KEY, cache); }
+  function getStockPriceUSD(ticker) {
+    const c = loadStockPriceCache();
+    const p = c.prices[String(ticker || '').toUpperCase()];
+    return (p && typeof p.price === 'number') ? p.price : null;
+  }
+  function getStockPriceChange(ticker) {
+    // Returns { pct, abs } if known, else null
+    const c = loadStockPriceCache();
+    const p = c.prices[String(ticker || '').toUpperCase()];
+    if (!p || typeof p.pct !== 'number') return null;
+    return { pct: p.pct, abs: p.abs || 0 };
+  }
+  async function fetchStockPrices(tickers, force) {
+    if (!tickers || !tickers.length) return;
+    const cache = loadStockPriceCache();
+    if (!force && cache.ts && (Date.now() - cache.ts) < STOCK_CACHE_MS) return;
+    const symbols = tickers.map(t => String(t).toUpperCase()).filter(Boolean).join(',');
+    // Yahoo's v7/finance/quote returns price + regularMarketChangePercent.
+    // Browser CORS is blocked — go through corsproxy.io (already used for news).
+    const yahooUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
+    const proxies = [
+      'https://corsproxy.io/?' + encodeURIComponent(yahooUrl),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(yahooUrl),
+    ];
+    let data = null;
+    for (const url of proxies) {
+      try {
+        const res = await fetch(url);
+        const j = await res.json();
+        if (j && j.quoteResponse && Array.isArray(j.quoteResponse.result)) {
+          data = j.quoteResponse.result;
+          break;
+        }
+      } catch (e) { /* try next proxy */ }
+    }
+    if (!data) return;
+    const next = { prices: { ...cache.prices }, ts: Date.now() };
+    data.forEach(q => {
+      const sym = (q.symbol || '').toUpperCase();
+      if (!sym) return;
+      next.prices[sym] = {
+        price: Number(q.regularMarketPrice) || 0,
+        pct: Number(q.regularMarketChangePercent) || 0,
+        abs: Number(q.regularMarketChange) || 0,
+        currency: q.currency || 'USD',
+      };
+    });
+    saveStockPriceCache(next);
+  }
+  async function refreshAllStockPrices(force) {
+    const items = storeGet('nw:stocks') || [];
+    const tickers = items.map(it => it.ticker).filter(Boolean);
+    if (!tickers.length) return;
+    await fetchStockPrices(tickers, !!force);
+    renderAllNetWorth();
+  }
+  // Stocks store either `{ name, ticker, shares }` (live-priced) or legacy
+  // `{ name, amount }` (manual CHF value). This helper returns the live
+  // CHF value of one stock item, falling back to amount if no ticker.
+  function stockItemValueCHF(it) {
+    if (it && it.ticker && typeof it.shares === 'number') {
+      const priceUSD = getStockPriceUSD(it.ticker);
+      if (priceUSD != null) {
+        const usdPerCHF = exchangeRates.USD || 1;
+        const valueUSD = priceUSD * it.shares;
+        return valueUSD / usdPerCHF; // CHF
+      }
+      // No price yet — return 0 so totals stay honest while loading
+      return 0;
+    }
+    return Number(it && it.amount) || 0;
+  }
+
   function renderNetWorthCategory(cat) {
     const items = storeGet('nw:' + cat.key) || [];
     const list = document.getElementById(cat.listId);
     if (!list) return 0;
     list.innerHTML = '';
     let total = 0;
+    const isStocks = cat.key === 'stocks';
     items.forEach((it, idx) => {
-      total += Number(it.amount) || 0;
+      const valueCHF = isStocks ? stockItemValueCHF(it) : (Number(it.amount) || 0);
+      total += valueCHF;
       const row = document.createElement('div');
       row.className = 'nw-row';
       const name = document.createElement('span');
       name.className = 'nw-name nw-name-edit';
-      name.textContent = it.name;
+      // For stocks with a ticker, show: "Apple · AAPL · 10 sh @ $172.40 ▲1.2%"
+      if (isStocks && it.ticker) {
+        const priceUSD = getStockPriceUSD(it.ticker);
+        const chg = getStockPriceChange(it.ticker);
+        const priceLabel = priceUSD != null ? '$' + priceUSD.toFixed(2) : '—';
+        const chgLabel = chg
+          ? (chg.pct >= 0 ? ' <span style="color:#6EE7B7">▲' : ' <span style="color:#FF8A8A">▼')
+            + Math.abs(chg.pct).toFixed(2) + '%</span>'
+          : '';
+        name.innerHTML = escapeHtml(it.name || it.ticker) +
+          ' <span style="color:var(--text-tertiary);font-size:11px">· ' +
+          escapeHtml(it.ticker) + ' · ' + Number(it.shares).toLocaleString('en-US', { maximumFractionDigits: 4 }) +
+          ' sh @ ' + priceLabel + chgLabel + '</span>';
+      } else {
+        name.textContent = it.name;
+      }
       name.title = 'Tap to rename';
       name.addEventListener('click', () => beginNwNameEdit(name, items, idx, cat.key));
       const amt = document.createElement('span');
       amt.className = 'nw-amt nw-amt-edit';
-      amt.textContent = fmtMoney(it.amount);
-      amt.title = 'Tap to edit · type +500 to add, -200 to subtract, or a new total';
-      amt.addEventListener('click', () => beginNwAmountEdit(amt, items, idx, cat.key));
+      amt.textContent = fmtMoney(valueCHF);
+      if (isStocks && it.ticker) {
+        amt.title = 'Live price × shares. Tap name to rename, × to delete.';
+        // Disable amount-editing for live stocks; the value is computed.
+      } else {
+        amt.title = 'Tap to edit · type +500 to add, -200 to subtract, or a new total';
+        amt.addEventListener('click', () => beginNwAmountEdit(amt, items, idx, cat.key));
+      }
       const del = document.createElement('button'); del.className = 'nw-del'; del.textContent = '×';
       del.addEventListener('click', () => {
         const removed = items[idx];
         items.splice(idx, 1); storeSet('nw:' + cat.key, items);
-        if (removed) logActivity(cat.key, removed.name, -(Number(removed.amount) || 0), 'delete');
+        if (removed) {
+          const removedVal = isStocks ? stockItemValueCHF(removed) : (Number(removed.amount) || 0);
+          logActivity(cat.key, removed.name, -removedVal, 'delete');
+        }
         renderAllNetWorth();
       });
       row.appendChild(name); row.appendChild(amt); row.appendChild(del);
@@ -2222,8 +2331,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     NW_CATS.forEach(cat => {
       const meta = NW_SLICE_META[cat.key] || { color: '#FFFFFF' };
       const items = storeGet('nw:' + cat.key) || [];
+      const isStocks = cat.key === 'stocks';
       items.forEach((it, i) => {
-        const v = Number(it.amount) || 0;
+        const v = isStocks ? stockItemValueCHF(it) : (Number(it.amount) || 0);
         if (v > 0) {
           slices.push({
             key: cat.key + '::' + i,
@@ -2405,23 +2515,40 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
   NW_CATS.forEach(cat => {
     const addBtn = document.getElementById(cat.addId);
-    const nameInput = document.getElementById(cat.nameId);
+    const isStocks = cat.key === 'stocks';
+    // Stocks: use the ticker input as the "name" field for binding purposes.
+    const nameInput = document.getElementById(isStocks ? 'stocksTicker' : cat.nameId);
     const amtInput = document.getElementById(cat.amtId);
     if (!addBtn) return;
-    function doAdd() {
-      const n = nameInput.value.trim();
+    async function doAdd() {
+      const raw = nameInput.value.trim();
       const a = parseFloat(amtInput.value);
-      if (!n || isNaN(a)) return;
-      // Interpret the input in the CURRENTLY SELECTED display currency, then
-      // convert to CHF for storage. So if USD is selected and user types 40000,
-      // we store 40000 / USD-per-CHF rate — 31,400 CHF; displays as $40,000.
+      if (!raw || isNaN(a)) return;
+      const items = storeGet('nw:' + cat.key) || [];
+      if (isStocks) {
+        // Ticker + shares. Fetch price immediately so the value is live
+        // before the user even sees the row.
+        const ticker = raw.toUpperCase();
+        const shares = a;
+        if (shares <= 0) return;
+        const item = { name: ticker, ticker, shares };
+        items.push(item);
+        storeSet('nw:' + cat.key, items);
+        // Fetch the price for this ticker right away (force = true).
+        await fetchStockPrices([ticker], true);
+        const valueCHF = stockItemValueCHF(item);
+        logActivity(cat.key, ticker, valueCHF, 'add');
+        nameInput.value = ''; amtInput.value = '';
+        renderAllNetWorth();
+        return;
+      }
+      // Non-stock categories: original behavior (name + currency amount → CHF).
       const symbol = currencyEl ? currencyEl.value : 'CHF';
       const rate = exchangeRates[symbol] || 1;
       const amountCHF = a / rate;
-      const items = storeGet('nw:' + cat.key) || [];
-      items.push({ name: n, amount: amountCHF });
+      items.push({ name: raw, amount: amountCHF });
       storeSet('nw:' + cat.key, items);
-      logActivity(cat.key, n, amountCHF, 'add');
+      logActivity(cat.key, raw, amountCHF, 'add');
       nameInput.value = ''; amtInput.value = '';
       renderAllNetWorth();
     }
@@ -2429,6 +2556,17 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAdd(); });
     amtInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAdd(); });
   });
+  // Manual refresh button + auto-refresh on page load
+  const stocksRefreshBtn = document.getElementById('stocksRefreshBtn');
+  if (stocksRefreshBtn) stocksRefreshBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    stocksRefreshBtn.textContent = '↻ Refreshing…';
+    refreshAllStockPrices(true).then(() => {
+      stocksRefreshBtn.textContent = '↻ Refresh now';
+    });
+  });
+  // Kick off a price refresh on page load (uses cache if <5 min old).
+  refreshAllStockPrices(false);
 
   if (currencyEl) {
     const savedCur = storeGet(CURRENCY_KEY);
@@ -2801,7 +2939,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     let g = 0;
     NW_CATS.forEach(cat => {
       const items = storeGet('nw:' + cat.key) || [];
-      items.forEach(it => { g += Number(it.amount) || 0; });
+      const isStocks = cat.key === 'stocks';
+      items.forEach(it => {
+        g += isStocks ? stockItemValueCHF(it) : (Number(it.amount) || 0);
+      });
     });
     return g;
   }
@@ -2967,12 +3108,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     const out = [];
     NW_CATS.forEach(cat => {
       const items = storeGet('nw:' + cat.key) || [];
+      const isStocks = cat.key === 'stocks';
       items.forEach((it, idx) => {
         out.push({
           catKey: cat.key,
           itemIdx: idx,
           itemName: String(it.name || ''),
-          amountCHF: Number(it.amount) || 0
+          amountCHF: isStocks ? stockItemValueCHF(it) : (Number(it.amount) || 0)
         });
       });
     });
