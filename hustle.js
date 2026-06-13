@@ -147,7 +147,7 @@ window.addEventListener('unhandledrejection', (e) => {
   tabBtns.forEach(b => b.addEventListener('click', () => { try { setTab(b.dataset.tab); } catch (e) { console.error('setTab failed:', e); } }));
   const savedTab = get(KEYS.activeTab, 'overview');
   try {
-    setTab(['overview','calendar','globe','trading'].includes(savedTab) ? savedTab : 'overview');
+    setTab(['overview','calendar','globe','trading','kronos'].includes(savedTab) ? savedTab : 'overview');
   } catch (e) {
     console.error('Initial setTab failed:', e);
     // Fallback: force overview tab if any error
@@ -1505,6 +1505,316 @@ window.addEventListener('unhandledrejection', (e) => {
       : 'consolidation';
     el.innerHTML = `Pulse reads <b style="color:#B794F4">${tone}</b>. Top signals: <b style="color:#FAFAFA">${top}</b>. <b style="color:#6EE7B7">${linkedCount}</b> event${linkedCount === 1 ? '' : 's'} cross-reference your watchlist — open the globe and click any glowing hotspot to drill into its industry exposure and source.`;
   }
+
+  // ============================================================
+  // KRONOS — AI stock scanner. Client-side port of the Kronos
+  // news-sentiment integration (originally Python/FastAPI):
+  //   OU mean-reversion · regime detection (HMM proxy) · trend
+  //   filter (Kalman proxy) · tail risk (EVT) — each boosted by
+  //   locally-scored news sentiment. Zero backend, zero extra
+  //   API credits: prices from Yahoo v8/chart, sentiment from a
+  //   built-in financial lexicon, news via the existing feed key.
+  // ============================================================
+  const KRONOS_CACHE_KEY = 'hustle_kronos_cache';
+  const KRONOS_TTL_MS = 4 * 60 * 60 * 1000; // 4h, per the original guide
+  const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
+
+  async function kronosFetchCloses(ticker) {
+    const sym = ticker.toUpperCase();
+    const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=6mo`;
+    const urls = [chartUrl,
+      'https://corsproxy.io/?' + encodeURIComponent(chartUrl),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(chartUrl)];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const j = await res.json();
+        const r = j && j.chart && j.chart.result && j.chart.result[0];
+        const closes = r && r.indicators && r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close;
+        if (closes && closes.length) {
+          const clean = closes.filter(c => typeof c === 'number' && isFinite(c));
+          if (clean.length >= 30) return clean;
+        }
+      } catch (e) { /* try next */ }
+    }
+    return null;
+  }
+
+  // ─── Quant engines (simplified ports of the four Kronos engines) ───
+  function kronosQuant(closes) {
+    const n = closes.length;
+    const rets = [];
+    for (let i = 1; i < n; i++) rets.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+    const last = closes[n - 1];
+    const sma = (k) => mean(closes.slice(-k));
+    const sma20 = sma(Math.min(20, n)), sma50 = sma(Math.min(50, n));
+    const win = closes.slice(-20);
+    const sd20 = Math.sqrt(mean(win.map(c => (c - sma20) ** 2))) || 1e-9;
+
+    // OU mean reversion: z-score of price vs 20d mean. Oversold (z<0)
+    // → high score (buy-the-dip), overbought → low. Half-life via AR(1)
+    // on demeaned log price.
+    const z = (last - sma20) / sd20;
+    const ouScore = clip(50 - z * 20, 0, 100);
+    const logs = closes.map(Math.log);
+    const m = mean(logs);
+    let num = 0, den = 0;
+    for (let i = 1; i < logs.length; i++) { num += (logs[i] - m) * (logs[i - 1] - m); den += (logs[i - 1] - m) ** 2; }
+    const phi = den > 0 ? clip(num / den, 0.01, 0.999) : 0.9;
+    const halflife = Math.log(0.5) / Math.log(phi);
+
+    // Regime (HMM proxy): trend via SMA20 vs SMA50, vol percentile splits
+    // high/low-vol states. Confidence from separation strength.
+    const dailyVol = Math.sqrt(mean(rets.slice(-20).map(r => r * r)));
+    const annVol = dailyVol * Math.sqrt(252);
+    const trendSep = (sma20 - sma50) / sma50;
+    let regime, regimeConf;
+    if (annVol > 0.55) { regime = 'HighVol'; regimeConf = clip(annVol, 0.5, 0.95); }
+    else if (Math.abs(trendSep) < 0.01) { regime = 'LowVol'; regimeConf = 0.55; }
+    else { regime = trendSep > 0 ? 'Bull' : 'Bear'; regimeConf = clip(0.5 + Math.abs(trendSep) * 8, 0.5, 0.95); }
+
+    // Trend (Kalman proxy): normalized linear-regression slope over 20d;
+    // velocity = slope now vs slope 10d ago.
+    const slopeOf = (arr) => {
+      const k = arr.length, xm = (k - 1) / 2, ym = mean(arr);
+      let sn = 0, sdn = 0;
+      for (let i = 0; i < k; i++) { sn += (i - xm) * (arr[i] - ym); sdn += (i - xm) ** 2; }
+      return sdn > 0 ? (sn / sdn) / ym : 0; // per-day fractional slope
+    };
+    const trendNow = slopeOf(closes.slice(-20));
+    const trendPrev = slopeOf(closes.slice(-30, -10));
+    const velocity = trendNow - trendPrev;
+
+    // Tail risk (EVT proxy): historical 99% VaR + expected shortfall.
+    const sorted = rets.slice().sort((a, b) => a - b);
+    const idx = Math.max(0, Math.floor(sorted.length * 0.01));
+    const var99 = Math.abs(sorted[idx] || 0.03);
+    const tail = sorted.slice(0, Math.max(1, idx + 1));
+    const es = Math.abs(mean(tail));
+    const evtRiskScore = clip((1 - var99 * 10) * 100, 0, 100);
+
+    return { ouScore, halflife, z, regime, regimeConf, trendNow, velocity, var99, es, evtRiskScore, last };
+  }
+
+  // ─── Sentiment (TextBlob port → financial lexicon, fully local) ───
+  const KR_POS = { beat:3, beats:3, surge:3, surges:3, soar:3, soars:3, rally:2, rallies:2, record:2, strong:2, growth:2, profit:2, profits:2, upgrade:3, upgraded:3, outperform:3, buy:2, bullish:3, gain:2, gains:2, jump:2, jumps:2, rise:1, rises:1, up:1, high:1, win:2, wins:2, expand:1, expands:1, boost:2, boosts:2, positive:2, success:2, breakthrough:3, partnership:1, dividend:1, buyback:2, exceed:3, exceeds:3, accelerate:2, momentum:1, optimism:2, recover:2, recovery:2 };
+  const KR_NEG = { miss:3, misses:3, plunge:3, plunges:3, crash:3, crashes:3, fall:2, falls:2, drop:2, drops:2, weak:2, loss:2, losses:2, downgrade:3, downgraded:3, underperform:3, sell:2, bearish:3, decline:2, declines:2, slump:3, slumps:3, down:1, low:1, lawsuit:2, probe:2, investigation:2, fraud:3, layoff:2, layoffs:2, cut:1, cuts:1, warning:2, warns:2, negative:2, fear:2, fears:2, recession:2, bankruptcy:3, default:2, tumble:3, tumbles:3, sink:2, sinks:2, risk:1, risks:1, concern:1, concerns:1 };
+  const KR_HEDGE = ['could','may','might','possibly','perhaps','reportedly','rumor','expects','believes','opinion','likely','potential'];
+  function kronosPolarity(text) {
+    if (!text) return { pol: 0, subj: 0 };
+    const toks = String(text).toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+    let score = 0, hits = 0, hedges = 0, negate = false;
+    for (const t of toks) {
+      if (t === 'not' || t === 'no' || t === 'never' || t === "isnt" || t === "wont") { negate = true; continue; }
+      let v = KR_POS[t] ? KR_POS[t] : (KR_NEG[t] ? -KR_NEG[t] : 0);
+      if (KR_HEDGE.indexOf(t) !== -1) hedges++;
+      if (v !== 0) { score += negate ? -v : v; hits++; }
+      negate = false;
+    }
+    const pol = hits ? clip(score / (hits * 3), -1, 1) : 0;
+    const subj = clip(hedges / Math.max(4, toks.length / 4), 0, 1);
+    return { pol, subj };
+  }
+  // Port of score_article: headline 70%, description 30%.
+  function kronosScoreArticle(headline, description) {
+    const h = kronosPolarity(headline), d = kronosPolarity(description);
+    const combined = 0.7 * h.pol + 0.3 * d.pol;
+    const confidence = Math.min(1, Math.abs(combined) * (1 - 0.3 * h.subj));
+    return { combined, confidence, subj: h.subj };
+  }
+  // Port of aggregate_ticker_sentiment: exp time decay, momentum = recent
+  // half minus old half, direction at ±0.1.
+  function kronosAggregate(scored, daysBack) {
+    if (!scored.length) return { net: 0, dir: 'neutral', conf: 0, n: 0, bull: 0, bear: 0, momentum: 0 };
+    const hi = scored.filter(a => a.confidence >= 0.2);
+    const use = hi.length ? hi : scored;
+    const now = Date.now();
+    let wSum = 0, polSum = 0, confSum = 0;
+    const pols = [];
+    use.forEach(a => {
+      const age = clip((now - a.ts) / 86400000, 0, daysBack);
+      const w = Math.exp(-age / daysBack);
+      wSum += w; polSum += a.combined * w; confSum += a.confidence * w;
+      pols.push(a.combined);
+    });
+    const net = wSum ? polSum / wSum : 0;
+    const conf = wSum ? confSum / wSum : 0;
+    const dir = net > 0.1 ? 'bullish' : (net < -0.1 ? 'bearish' : 'neutral');
+    const bull = pols.filter(p => p > 0.1).length, bear = pols.filter(p => p < -0.1).length;
+    const half = Math.floor(pols.length / 2);
+    const momentum = pols.length > 1 ? mean(pols.slice(0, half)) - mean(pols.slice(half)) : 0;
+    return { net, dir, conf, n: use.length, bull, bear, momentum };
+  }
+
+  async function kronosFetchNews(ticker) {
+    const apiKey = get(KEYS.newsKey, '');
+    if (!apiKey || detectNewsProvider(apiKey) !== 'newsapi') return [];
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(ticker)}&language=en&sortBy=publishedAt&pageSize=20&apiKey=${encodeURIComponent(apiKey)}`;
+    const tries = [url,
+      'https://corsproxy.io/?' + encodeURIComponent(url),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
+    for (const u of tries) {
+      try {
+        const res = await fetch(u);
+        const j = await res.json();
+        if (j && j.status === 'ok' && Array.isArray(j.articles)) {
+          return j.articles.map(a => ({
+            headline: a.title || '', description: a.description || '',
+            url: a.url || '#', source: (a.source && a.source.name) || '',
+            ts: a.publishedAt ? Date.parse(a.publishedAt) : Date.now(),
+          }));
+        }
+      } catch (e) { /* try next */ }
+    }
+    return [];
+  }
+
+  // ─── Signal booster ports (NewsSignalBooster, weight 0.15) ───
+  const KR_W = 0.15;
+  function kronosBoost(quant, agg) {
+    const boostedOu = clip(quant.ouScore + clip(agg.net * agg.conf * KR_W * 100, -10, 10), 0, 100);
+    let hmmConf = quant.regimeConf;
+    if ((quant.regime === 'Bull' && agg.net < -0.3) || (quant.regime === 'Bear' && agg.net > 0.3)) {
+      hmmConf = quant.regimeConf * (0.9 - Math.abs(agg.net) * agg.conf * KR_W);
+    }
+    const riskMult = 1 + (-agg.net * agg.momentum) * KR_W;
+    const boostedVar = clip(quant.var99 * riskMult, quant.var99 * 0.5, Math.min(0.20, quant.var99 * 2));
+    return { boostedOu, hmmConf, boostedVar };
+  }
+  // Composite: 35% OU + 20% regime + 15% trend(+velocity) + 15% inverted risk + 15% sentiment.
+  function kronosComposite(b, quant, agg) {
+    const trendNorm = clip(50 + quant.trendNow * 5000, 0, 100);
+    const velBoost = clip(quant.velocity * 2000, -10, 10);
+    const riskNorm = clip((1 - quant.var99 * 10) * 100, 0, 100);
+    const sentNorm = (agg.net + 1) * 50;
+    return clip(0.35 * b.boostedOu + 0.20 * b.hmmConf * 100 + 0.15 * (trendNorm + velBoost) + 0.15 * riskNorm + 0.15 * sentNorm, 0, 100);
+  }
+  function kronosTradeSignal(composite, agg) {
+    let sig = composite >= 75 ? 'STRONG_BUY' : composite >= 60 ? 'BUY' : composite >= 40 ? 'NEUTRAL' : composite >= 25 ? 'SELL' : 'STRONG_SELL';
+    if (agg.dir === 'bearish' && (sig === 'STRONG_BUY' || sig === 'BUY')) sig = sig === 'STRONG_BUY' ? 'STRONG_SELL' : 'NEUTRAL';
+    else if (agg.dir === 'bullish' && (sig === 'SELL' || sig === 'STRONG_SELL')) sig = sig === 'STRONG_SELL' ? 'STRONG_BUY' : 'NEUTRAL';
+    const conf = (agg.n >= 10 && agg.conf >= 0.6) ? 'HIGH' : (agg.n >= 5 && agg.conf >= 0.3) ? 'MEDIUM' : 'LOW';
+    return { sig, conf };
+  }
+
+  async function kronosScan(ticker) {
+    const status = document.getElementById('kronosStatus');
+    const out = document.getElementById('kronosResult');
+    if (!out) return;
+    const sym = String(ticker || '').trim().toUpperCase();
+    if (!sym) return;
+    const setKStatus = t => { if (status) status.textContent = t; };
+
+    // 4h cache (stored under hustle_ prefix → syncs like everything else)
+    const cacheAll = get(KRONOS_CACHE_KEY, {});
+    const hit = cacheAll[sym];
+    if (hit && (Date.now() - hit.ts) < KRONOS_TTL_MS) {
+      setKStatus('CACHED · ' + new Date(hit.ts).toLocaleTimeString());
+      kronosRender(hit.signal);
+      return;
+    }
+
+    setKStatus('FETCHING PRICES…');
+    out.innerHTML = '<div class="kronos-card" style="text-align:center;color:var(--text-tertiary);font-size:13px">Running Kronos engines on ' + escapeHtml(sym) + '…</div>';
+    const closes = await kronosFetchCloses(sym);
+    if (!closes) {
+      setKStatus('PRICE FEED FAILED');
+      out.innerHTML = '<div class="kronos-card" style="text-align:center;color:var(--accent-rose);font-size:13px">Couldn\'t load price history for ' + escapeHtml(sym) + ' — check the ticker and try again.</div>';
+      return;
+    }
+    const quant = kronosQuant(closes);
+
+    setKStatus('SCORING NEWS…');
+    const articles = await kronosFetchNews(sym);
+    const scored = articles.map(a => ({ ...a, ...kronosScoreArticle(a.headline, a.description) }));
+    const agg = kronosAggregate(scored, 7);
+
+    const b = kronosBoost(quant, agg);
+    const composite = kronosComposite(b, quant, agg);
+    const ts = kronosTradeSignal(composite, agg);
+    const topHeadlines = scored.slice().sort((x, y) => y.confidence - x.confidence).slice(0, 3);
+
+    const signal = { sym, quant, agg, b, composite, ts, topHeadlines, hasNews: articles.length > 0 };
+    cacheAll[sym] = { ts: Date.now(), signal };
+    set(KRONOS_CACHE_KEY, cacheAll);
+    setKStatus('LIVE · ' + new Date().toLocaleTimeString());
+    kronosRender(signal);
+  }
+
+  function kronosRender(s) {
+    const out = document.getElementById('kronosResult');
+    if (!out) return;
+    const q = s.quant, a = s.agg;
+    const sigCls = s.ts.sig.indexOf('BUY') !== -1 ? 'buy' : (s.ts.sig.indexOf('SELL') !== -1 ? 'sell' : 'neutral');
+    const barColor = sigCls === 'buy' ? 'var(--accent-mint)' : sigCls === 'sell' ? 'var(--accent-rose)' : 'var(--accent-amber)';
+    const dirColor = a.dir === 'bullish' ? 'var(--accent-mint)' : a.dir === 'bearish' ? 'var(--accent-rose)' : 'var(--accent-amber)';
+    const fmtPct = v => (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+    const bar = (val, color) => '<div class="kronos-bar"><div class="kronos-bar-fill" style="width:' + clip(val, 0, 100).toFixed(0) + '%;background:' + color + '"></div></div>';
+    const headlines = s.topHeadlines.length
+      ? s.topHeadlines.map(h => {
+          const pc = h.combined > 0.05 ? 'var(--accent-mint)' : h.combined < -0.05 ? 'var(--accent-rose)' : 'var(--text-tertiary)';
+          const pm = h.combined > 0.05 ? '▲' : h.combined < -0.05 ? '▼' : '◦';
+          return '<div class="kronos-headline"><span class="kronos-hl-pol" style="color:' + pc + '">' + pm + ' ' + h.combined.toFixed(2) + '</span><a href="' + escapeHtml(h.url) + '" target="_blank" rel="noopener">' + escapeHtml(h.headline) + '</a></div>';
+        }).join('')
+      : '<div style="font-size:12px;color:var(--text-tertiary);font-style:italic;padding:8px 0">' + (s.hasNews ? 'No high-confidence headlines.' : 'No news key connected — pure quant signal. Add your NewsAPI key in the Globe tab to enable sentiment boosts.') + '</div>';
+
+    out.innerHTML = `
+      <div class="kronos-card">
+        <div class="kronos-head">
+          <div>
+            <div style="font-family:var(--font-mono);font-size:22px;font-weight:800;letter-spacing:0.06em">${escapeHtml(s.sym)} <span style="font-size:13px;color:var(--text-tertiary)">$${q.last.toFixed(2)}</span></div>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:3px">Composite <b style="color:var(--text-primary)">${s.composite.toFixed(1)}</b> / 100 · Confidence ${s.ts.conf}</div>
+          </div>
+          <span class="kronos-sig ${sigCls}">${escapeHtml(s.ts.sig.replace('_', ' '))}</span>
+        </div>
+        ${bar(s.composite, barColor)}
+        <div class="kronos-grid" style="margin-top:14px">
+          <div class="kronos-engine">
+            <div class="kronos-engine-h"><span>Mean Reversion · OU</span><span style="color:var(--accent-blue)">${s.b.boostedOu.toFixed(1)}</span></div>
+            ${bar(s.b.boostedOu, 'var(--accent-blue)')}
+            <div class="kronos-metric">Base <b>${q.ouScore.toFixed(1)}</b> → boosted <b>${s.b.boostedOu.toFixed(1)}</b><br>Z-score <b>${q.z.toFixed(2)}</b> · Half-life <b>${isFinite(q.halflife) ? q.halflife.toFixed(1) : '—'}d</b></div>
+          </div>
+          <div class="kronos-engine">
+            <div class="kronos-engine-h"><span>Market Regime · HMM</span><span style="color:var(--accent-purple)">${q.regime}</span></div>
+            ${bar(s.b.hmmConf * 100, 'var(--accent-purple)')}
+            <div class="kronos-metric">Confidence <b>${(s.b.hmmConf * 100).toFixed(0)}%</b>${s.b.hmmConf < q.regimeConf ? ' <span style="color:var(--accent-amber)">(news contradicts regime)</span>' : ''}</div>
+          </div>
+          <div class="kronos-engine">
+            <div class="kronos-engine-h"><span>Trend · Kalman</span><span style="color:${q.trendNow >= 0 ? 'var(--accent-mint)' : 'var(--accent-rose)'}">${q.trendNow >= 0 ? '↑' : '↓'} ${fmtPct(q.trendNow)}/d</span></div>
+            ${bar(clip(50 + q.trendNow * 5000, 0, 100), q.trendNow >= 0 ? 'var(--accent-mint)' : 'var(--accent-rose)')}
+            <div class="kronos-metric">Velocity <b>${fmtPct(q.velocity)}</b> ${q.velocity >= 0 ? '(accelerating)' : '(decelerating)'}</div>
+          </div>
+          <div class="kronos-engine">
+            <div class="kronos-engine-h"><span>Tail Risk · EVT</span><span style="color:var(--accent-amber)">${q.evtRiskScore.toFixed(0)}</span></div>
+            ${bar(q.evtRiskScore, 'var(--accent-amber)')}
+            <div class="kronos-metric">VaR 99% <b>${(q.var99 * 100).toFixed(1)}%</b> → adj <b>${(s.b.boostedVar * 100).toFixed(1)}%</b> · ES <b>${(q.es * 100).toFixed(1)}%</b></div>
+          </div>
+        </div>
+        <div class="kronos-engine" style="margin-top:12px">
+          <div class="kronos-engine-h"><span>News Sentiment</span><span style="color:${dirColor};letter-spacing:0.1em">${a.dir.toUpperCase()} · ${(a.conf * 100).toFixed(0)}%</span></div>
+          ${bar((a.net + 1) * 50, dirColor)}
+          <div class="kronos-metric">Net <b>${a.net >= 0 ? '+' : ''}${a.net.toFixed(2)}</b> · Momentum <b>${a.momentum >= 0 ? '+' : ''}${a.momentum.toFixed(2)}</b> ${a.momentum > 0.02 ? '(improving)' : a.momentum < -0.02 ? '(deteriorating)' : '(flat)'} · <b>${a.n}</b> articles (${a.bull}▲ / ${a.bear}▼)</div>
+          <div style="margin-top:8px">${headlines}</div>
+        </div>
+        <div style="font-size:10px;color:var(--text-quaternary);margin-top:12px;text-align:center">Quant signals are heuristics, not financial advice. Cached 4h — rescan to refresh.</div>
+      </div>`;
+  }
+
+  const kronosScanBtn = document.getElementById('kronosScanBtn');
+  const kronosTickerInput = document.getElementById('kronosTicker');
+  const kronosQuickRow = document.getElementById('kronosQuickRow');
+  if (kronosScanBtn && kronosTickerInput) {
+    kronosScanBtn.addEventListener('click', () => kronosScan(kronosTickerInput.value));
+    kronosTickerInput.addEventListener('keydown', e => { if (e.key === 'Enter') kronosScan(kronosTickerInput.value); });
+  }
+  if (kronosQuickRow) kronosQuickRow.addEventListener('click', e => {
+    const btn = e.target.closest('[data-kq]');
+    if (!btn) return;
+    if (kronosTickerInput) kronosTickerInput.value = btn.dataset.kq;
+    kronosScan(btn.dataset.kq);
+  });
 
   // ============================================================
   // Cross-page sync hook — re-render after Supabase pulls fresh data
