@@ -1565,6 +1565,49 @@
   .kronos-headline a { color: inherit; text-decoration: none; }
   .kronos-headline a:hover { color: var(--accent-blue); }
   .kronos-hl-pol { font-family: var(--font-mono); font-size: 10px; font-weight: 800; margin-right: 6px; }
+  .kronos-ct-panel { padding-bottom: 16px; }
+  .kronos-ct-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .kronos-ct-open {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px; background: linear-gradient(135deg, rgba(242,192,99,0.16), rgba(183,148,244,0.12));
+    border: 1px solid rgba(242,192,99,0.34); border-radius: 999px;
+    color: var(--accent-amber); font-family: var(--font-mono);
+    font-size: 11px; font-weight: 800; letter-spacing: 0.10em; text-transform: uppercase;
+    text-decoration: none; transition: filter 0.15s, transform 0.15s;
+  }
+  .kronos-ct-open:hover { filter: brightness(1.12); transform: translateY(-1px); }
+  .kronos-ct-frame {
+    width: 100%; height: 460px; border: 1px solid var(--border-soft);
+    border-radius: 12px; background: rgba(0,0,0,0.25); display: block;
+  }
+  @media (max-width: 720px) { .kronos-ct-frame { height: 340px; } }
+  .kronos-ct-fallback { margin-top: 14px; }
+  .kronos-ct-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  @media (max-width: 720px) { .kronos-ct-grid { grid-template-columns: 1fr; } }
+  .kronos-ct-col h4 {
+    font-family: var(--font-mono); font-size: 9.5px; font-weight: 800;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-tertiary);
+    margin: 0 0 8px 0;
+  }
+  .kronos-ct-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.04); margin-bottom: 4px;
+    cursor: pointer; transition: background 0.15s;
+    font-size: 12px;
+  }
+  .kronos-ct-row:hover { background: rgba(255,255,255,0.06); }
+  .kronos-ct-row .sym { font-family: var(--font-mono); font-weight: 800; color: var(--text-primary); }
+  .kronos-ct-row .n { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
+  .kronos-ct-trade {
+    font-size: 11.5px; color: var(--text-secondary); padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04); line-height: 1.45;
+  }
+  .kronos-ct-trade:last-child { border-bottom: none; }
+  .kronos-ct-trade .who { color: var(--text-primary); font-weight: 600; }
+  .kronos-ct-trade .meta { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
+  .kronos-ct-buy  { color: var(--accent-mint); }
+  .kronos-ct-sell { color: var(--accent-rose); }
 
   /* Respect reduced-motion preferences */
   @media (prefers-reduced-motion: reduce) {
@@ -1794,6 +1837,23 @@
         Four quant engines (OU mean-reversion · regime detection · trend filter · tail risk) computed from 6 months of price history, boosted by news sentiment scored locally — no extra API credits. News uses your globe feed key; without one, the signal runs on pure quant.
       </div>
     </div>
+
+    <!-- ===== CapitolTrades / Congressional trades panel ===== -->
+    <div class="panel panel-pad kronos-ct-panel" style="margin-bottom:14px">
+      <div class="kronos-ct-head">
+        <div>
+          <div style="font-family:var(--font-mono);font-size:10px;font-weight:800;letter-spacing:0.22em;color:var(--accent-amber);text-transform:uppercase">🏛 Congressional Trades</div>
+          <div style="font-size:14px;font-weight:700;margin-top:4px">Smart money tracker · powered by House Stock Watcher / CapitolTrades</div>
+        </div>
+        <a href="https://www.capitoltrades.com/politicians" target="_blank" rel="noopener" class="kronos-ct-open">↗ Open CapitolTrades</a>
+      </div>
+      <iframe id="kronosCtFrame" class="kronos-ct-frame" src="https://www.capitoltrades.com/politicians" loading="lazy" sandbox="allow-scripts allow-same-origin"></iframe>
+      <div class="kronos-ct-fallback" id="kronosCtFallback">
+        <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">If the live embed above is blank, CapitolTrades blocks framing. Recent activity is mirrored below — click any ticker to scan it through Kronos.</div>
+        <div id="kronosCtOverview" style="font-size:12px;color:var(--text-secondary)">Loading Congressional trades…</div>
+      </div>
+    </div>
+
     <div id="kronosResult"></div>
   </section>
 

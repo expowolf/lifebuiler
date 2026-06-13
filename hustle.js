@@ -142,6 +142,12 @@ window.addEventListener('unhandledrejection', (e) => {
     }
     if (name === 'trading') { ensureTradingLoaded(); }
     if (name === 'calendar') { renderCalendar(); }
+    if (name === 'kronos') {
+      // Fire-and-forget: load Congressional trades on first visit
+      if (typeof kronosRenderCongressOverview === 'function') {
+        kronosRenderCongressOverview();
+      }
+    }
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
   tabBtns.forEach(b => b.addEventListener('click', () => { try { setTab(b.dataset.tab); } catch (e) { console.error('setTab failed:', e); } }));
@@ -1517,8 +1523,136 @@ window.addEventListener('unhandledrejection', (e) => {
   // ============================================================
   const KRONOS_CACHE_KEY = 'hustle_kronos_cache';
   const KRONOS_TTL_MS = 4 * 60 * 60 * 1000; // 4h, per the original guide
+  const KRONOS_CONGRESS_KEY = 'hustle_kronos_congress';
+  const KRONOS_CONGRESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h — Congress filings are slow
   const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
+
+  // ─── Congressional trades (House Stock Watcher — same data feed
+  //     CapitolTrades exposes on its politicians page). Public S3
+  //     JSON, no auth, CORS-friendly. We keep a recency-trimmed copy
+  //     in memory + a lightweight day-key flag in localStorage so we
+  //     only redownload once every 24h. ─────────────────────────
+  let kronosCongressData = null; // { trades: [...], stamp: ts }
+  function kronosCongressAmount(amtStr) {
+    // House Stock Watcher amount is a range string e.g. "$1,001 - $15,000"
+    if (!amtStr) return 0;
+    const nums = String(amtStr).match(/[\d,]+/g);
+    if (!nums || !nums.length) return 0;
+    const parsed = nums.map(s => parseInt(s.replace(/,/g, ''), 10)).filter(n => isFinite(n));
+    if (!parsed.length) return 0;
+    if (parsed.length === 1) return parsed[0];
+    return (parsed[0] + parsed[1]) / 2; // midpoint of the range
+  }
+  function kronosCongressIsBuy(t)  { return /purchase/i.test(t || ''); }
+  function kronosCongressIsSell(t) { return /sale/i.test(t || ''); }
+  async function kronosLoadCongress(force) {
+    if (kronosCongressData && !force) {
+      if (Date.now() - kronosCongressData.stamp < KRONOS_CONGRESS_TTL_MS) return kronosCongressData;
+    }
+    const cachedDay = get(KRONOS_CONGRESS_KEY, null);
+    const today = new Date().toISOString().slice(0, 10);
+    // House Stock Watcher's all-transactions S3 file. CapitolTrades
+    // aggregates the same filings; using the public dataset means
+    // zero credit cost + works offline of any provider.
+    const url = 'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
+    const tries = [url,
+      'https://corsproxy.io/?' + encodeURIComponent(url),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
+    for (const u of tries) {
+      try {
+        const res = await fetch(u);
+        if (!res.ok) continue;
+        const arr = await res.json();
+        if (!Array.isArray(arr)) continue;
+        // Trim to last 180 days so we don't carry 8MB in memory.
+        const cutoff = Date.now() - 180 * 86400000;
+        const trades = arr.filter(t => {
+          const d = Date.parse(t.transaction_date || t.disclosure_date || '');
+          return isFinite(d) && d >= cutoff && t.ticker && t.ticker !== '--';
+        }).map(t => ({
+          ticker: String(t.ticker || '').toUpperCase().replace(/^\$/, ''),
+          who: t.representative || '',
+          date: t.transaction_date || t.disclosure_date || '',
+          ts: Date.parse(t.transaction_date || t.disclosure_date || '') || 0,
+          type: t.type || '',
+          amount: kronosCongressAmount(t.amount),
+          amountRange: t.amount || '',
+          link: t.ptr_link || '',
+        }));
+        kronosCongressData = { trades, stamp: Date.now() };
+        set(KRONOS_CONGRESS_KEY, today);
+        return kronosCongressData;
+      } catch (e) { /* try next */ }
+    }
+    kronosCongressData = kronosCongressData || { trades: [], stamp: Date.now() };
+    return kronosCongressData;
+  }
+  function kronosCongressForTicker(sym, daysBack) {
+    if (!kronosCongressData || !sym) return null;
+    const cutoff = Date.now() - daysBack * 86400000;
+    const SYM = sym.toUpperCase();
+    const list = kronosCongressData.trades.filter(t => t.ticker === SYM && t.ts >= cutoff);
+    let buys = 0, sells = 0, buyVol = 0, sellVol = 0;
+    list.forEach(t => {
+      if (kronosCongressIsBuy(t.type))  { buys++;  buyVol  += t.amount; }
+      if (kronosCongressIsSell(t.type)) { sells++; sellVol += t.amount; }
+    });
+    const total = buys + sells;
+    const net = total ? (buys - sells) / total : 0;        // -1..+1
+    const volNet = (buyVol + sellVol)
+      ? (buyVol - sellVol) / (buyVol + sellVol)
+      : 0;
+    const conf = clip(total / 5, 0, 1);                    // 5+ trades = full confidence
+    const dir = net > 0.15 ? 'buying' : net < -0.15 ? 'selling' : 'mixed';
+    return { list, buys, sells, buyVol, sellVol, net, volNet, conf, dir, total };
+  }
+  // Boost: similar shape to NewsSignalBooster.boost_ou_score. Caps at ±8.
+  function kronosCongressBoost(baseOu, congress) {
+    if (!congress || congress.total === 0) return { boost: 0, boosted: baseOu };
+    const weighted = (congress.net * 0.6 + congress.volNet * 0.4) * congress.conf;
+    const boost = clip(weighted * 0.10 * 100, -8, 8);
+    return { boost, boosted: clip(baseOu + boost, 0, 100) };
+  }
+
+  async function kronosRenderCongressOverview() {
+    const el = document.getElementById('kronosCtOverview');
+    if (!el) return;
+    if (!kronosCongressData) {
+      el.textContent = 'Loading Congressional trades…';
+      await kronosLoadCongress(false);
+    }
+    if (!kronosCongressData || !kronosCongressData.trades.length) {
+      el.innerHTML = '<span style="color:var(--accent-rose)">Couldn\'t load Congressional trades feed. Try again later.</span>';
+      return;
+    }
+    // Aggregate by ticker over last 30 days.
+    const cutoff = Date.now() - 30 * 86400000;
+    const tally = {};
+    kronosCongressData.trades.forEach(t => {
+      if (t.ts < cutoff) return;
+      const buy = kronosCongressIsBuy(t.type), sell = kronosCongressIsSell(t.type);
+      if (!buy && !sell) return;
+      const r = tally[t.ticker] || (tally[t.ticker] = { sym: t.ticker, b: 0, s: 0, bv: 0, sv: 0 });
+      if (buy)  { r.b++; r.bv += t.amount; }
+      if (sell) { r.s++; r.sv += t.amount; }
+    });
+    const rows = Object.values(tally);
+    const topBuys  = rows.slice().sort((a, b) => b.bv - a.bv).filter(r => r.b > 0).slice(0, 6);
+    const topSells = rows.slice().sort((a, b) => b.sv - a.sv).filter(r => r.s > 0).slice(0, 6);
+    const buyHtml = topBuys.length ? topBuys.map(r =>
+      `<div class="kronos-ct-row" data-ct-scan="${escapeHtml(r.sym)}"><span class="sym">${escapeHtml(r.sym)}</span><span class="n">${r.b} buys · $${(r.bv / 1000).toFixed(0)}k</span></div>`
+    ).join('') : '<div style="font-size:11px;color:var(--text-tertiary)">No recent buys.</div>';
+    const sellHtml = topSells.length ? topSells.map(r =>
+      `<div class="kronos-ct-row" data-ct-scan="${escapeHtml(r.sym)}"><span class="sym">${escapeHtml(r.sym)}</span><span class="n">${r.s} sells · $${(r.sv / 1000).toFixed(0)}k</span></div>`
+    ).join('') : '<div style="font-size:11px;color:var(--text-tertiary)">No recent sells.</div>';
+    el.innerHTML = `
+      <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">Last 30 days · House disclosures · click any ticker to scan it through Kronos</div>
+      <div class="kronos-ct-grid">
+        <div class="kronos-ct-col"><h4>↑ Top Bought</h4>${buyHtml}</div>
+        <div class="kronos-ct-col"><h4>↓ Top Sold</h4>${sellHtml}</div>
+      </div>`;
+  }
 
   async function kronosFetchCloses(ticker) {
     const sym = ticker.toUpperCase();
@@ -1683,19 +1817,47 @@ window.addEventListener('unhandledrejection', (e) => {
     const boostedVar = clip(quant.var99 * riskMult, quant.var99 * 0.5, Math.min(0.20, quant.var99 * 2));
     return { boostedOu, hmmConf, boostedVar };
   }
-  // Composite: 35% OU + 20% regime + 15% trend(+velocity) + 15% inverted risk + 15% sentiment.
-  function kronosComposite(b, quant, agg) {
+  // Composite: 30% OU + 18% regime + 13% trend(+velocity) + 13% inverted risk
+  //          + 13% sentiment + 13% congress. Congress only contributes when
+  //          we actually have disclosures for the ticker; otherwise its weight
+  //          is redistributed proportionally.
+  function kronosComposite(b, quant, agg, congress) {
     const trendNorm = clip(50 + quant.trendNow * 5000, 0, 100);
     const velBoost = clip(quant.velocity * 2000, -10, 10);
     const riskNorm = clip((1 - quant.var99 * 10) * 100, 0, 100);
     const sentNorm = (agg.net + 1) * 50;
-    return clip(0.35 * b.boostedOu + 0.20 * b.hmmConf * 100 + 0.15 * (trendNorm + velBoost) + 0.15 * riskNorm + 0.15 * sentNorm, 0, 100);
+    const hasC = congress && congress.total > 0;
+    const congNorm = hasC ? ((congress.net * 0.6 + congress.volNet * 0.4) + 1) * 50 : 50;
+    let w = { ou: 0.30, hmm: 0.18, trend: 0.13, risk: 0.13, sent: 0.13, cong: 0.13 };
+    if (!hasC) {
+      // Redistribute the congress 13% across the others proportionally
+      const scale = 1 / (1 - 0.13);
+      w = { ou: 0.30 * scale, hmm: 0.18 * scale, trend: 0.13 * scale, risk: 0.13 * scale, sent: 0.13 * scale, cong: 0 };
+    }
+    return clip(
+      w.ou   * b.boostedOu +
+      w.hmm  * b.hmmConf * 100 +
+      w.trend * (trendNorm + velBoost) +
+      w.risk * riskNorm +
+      w.sent * sentNorm +
+      w.cong * congNorm,
+      0, 100);
   }
-  function kronosTradeSignal(composite, agg) {
+  function kronosTradeSignal(composite, agg, congress) {
     let sig = composite >= 75 ? 'STRONG_BUY' : composite >= 60 ? 'BUY' : composite >= 40 ? 'NEUTRAL' : composite >= 25 ? 'SELL' : 'STRONG_SELL';
     if (agg.dir === 'bearish' && (sig === 'STRONG_BUY' || sig === 'BUY')) sig = sig === 'STRONG_BUY' ? 'STRONG_SELL' : 'NEUTRAL';
     else if (agg.dir === 'bullish' && (sig === 'SELL' || sig === 'STRONG_SELL')) sig = sig === 'STRONG_SELL' ? 'STRONG_BUY' : 'NEUTRAL';
-    const conf = (agg.n >= 10 && agg.conf >= 0.6) ? 'HIGH' : (agg.n >= 5 && agg.conf >= 0.3) ? 'MEDIUM' : 'LOW';
+    // Congressional override: strong, high-confidence selling overrides BUY → NEUTRAL.
+    if (congress && congress.conf >= 0.6) {
+      if (congress.dir === 'selling' && (sig === 'STRONG_BUY' || sig === 'BUY')) sig = sig === 'STRONG_BUY' ? 'SELL' : 'NEUTRAL';
+      else if (congress.dir === 'buying'  && (sig === 'STRONG_SELL' || sig === 'SELL')) sig = sig === 'STRONG_SELL' ? 'BUY' : 'NEUTRAL';
+    }
+    const hasC = congress && congress.total > 0;
+    // News confidence is the primary driver; Congress raises confidence if it agrees.
+    let conf = (agg.n >= 10 && agg.conf >= 0.6) ? 'HIGH' : (agg.n >= 5 && agg.conf >= 0.3) ? 'MEDIUM' : 'LOW';
+    if (hasC && congress.conf >= 0.6 && conf !== 'HIGH') {
+      conf = conf === 'LOW' ? 'MEDIUM' : 'HIGH';
+    }
     return { sig, conf };
   }
 
@@ -1731,12 +1893,20 @@ window.addEventListener('unhandledrejection', (e) => {
     const scored = articles.map(a => ({ ...a, ...kronosScoreArticle(a.headline, a.description) }));
     const agg = kronosAggregate(scored, 7);
 
+    setKStatus('CHECKING CONGRESS…');
+    await kronosLoadCongress(false);
+    const congress = kronosCongressForTicker(sym, 90);
+
     const b = kronosBoost(quant, agg);
-    const composite = kronosComposite(b, quant, agg);
-    const ts = kronosTradeSignal(composite, agg);
+    // Layer Congressional smart-money on top of the news-boosted OU score.
+    const cBoost = kronosCongressBoost(b.boostedOu, congress);
+    b.boostedOu = cBoost.boosted;
+    b.congressBoost = cBoost.boost;
+    const composite = kronosComposite(b, quant, agg, congress);
+    const ts = kronosTradeSignal(composite, agg, congress);
     const topHeadlines = scored.slice().sort((x, y) => y.confidence - x.confidence).slice(0, 3);
 
-    const signal = { sym, quant, agg, b, composite, ts, topHeadlines, hasNews: articles.length > 0 };
+    const signal = { sym, quant, agg, b, composite, ts, topHeadlines, hasNews: articles.length > 0, congress };
     cacheAll[sym] = { ts: Date.now(), signal };
     set(KRONOS_CACHE_KEY, cacheAll);
     setKStatus('LIVE · ' + new Date().toLocaleTimeString());
@@ -1798,8 +1968,39 @@ window.addEventListener('unhandledrejection', (e) => {
           <div class="kronos-metric">Net <b>${a.net >= 0 ? '+' : ''}${a.net.toFixed(2)}</b> · Momentum <b>${a.momentum >= 0 ? '+' : ''}${a.momentum.toFixed(2)}</b> ${a.momentum > 0.02 ? '(improving)' : a.momentum < -0.02 ? '(deteriorating)' : '(flat)'} · <b>${a.n}</b> articles (${a.bull}▲ / ${a.bear}▼)</div>
           <div style="margin-top:8px">${headlines}</div>
         </div>
+        ${kronosCongressCardHtml(s.congress)}
         <div style="font-size:10px;color:var(--text-quaternary);margin-top:12px;text-align:center">Quant signals are heuristics, not financial advice. Cached 4h — rescan to refresh.</div>
       </div>`;
+  }
+
+  function kronosCongressCardHtml(c) {
+    if (!c || c.total === 0) {
+      return `<div class="kronos-engine" style="margin-top:12px">
+        <div class="kronos-engine-h"><span>🏛 Congressional Trades</span><span style="color:var(--text-tertiary)">NO ACTIVITY</span></div>
+        <div class="kronos-metric" style="color:var(--text-tertiary);font-style:italic">No House disclosures for this ticker in the last 90 days.</div>
+      </div>`;
+    }
+    const cDirColor = c.dir === 'buying' ? 'var(--accent-mint)' : c.dir === 'selling' ? 'var(--accent-rose)' : 'var(--accent-amber)';
+    const cBar = clip(((c.net * 0.6 + c.volNet * 0.4) + 1) * 50, 0, 100);
+    const recent = c.list.slice().sort((a, b) => b.ts - a.ts).slice(0, 3);
+    const trades = recent.map(t => {
+      const buy = kronosCongressIsBuy(t.type), sell = kronosCongressIsSell(t.type);
+      const cls = buy ? 'kronos-ct-buy' : sell ? 'kronos-ct-sell' : '';
+      const sign = buy ? 'BUY ' : sell ? 'SELL' : t.type.toUpperCase();
+      const dateLabel = t.date || '—';
+      return `<div class="kronos-ct-trade">
+        <span class="${cls}" style="font-family:var(--font-mono);font-weight:800;font-size:10.5px;letter-spacing:0.06em">${sign}</span>
+        <span class="who"> ${escapeHtml(t.who)}</span>
+        <span class="meta"> · ${escapeHtml(dateLabel)} · ${escapeHtml(t.amountRange || '$' + Math.round(t.amount).toLocaleString())}</span>
+      </div>`;
+    }).join('');
+    return `<div class="kronos-engine" style="margin-top:12px">
+      <div class="kronos-engine-h"><span>🏛 Congressional Trades · last 90d</span><span style="color:${cDirColor};letter-spacing:0.1em">${c.dir.toUpperCase()} · ${(c.conf * 100).toFixed(0)}%</span></div>
+      <div class="kronos-bar"><div class="kronos-bar-fill" style="width:${cBar.toFixed(0)}%;background:${cDirColor}"></div></div>
+      <div class="kronos-metric"><b class="kronos-ct-buy">${c.buys} buys</b> · <b class="kronos-ct-sell">${c.sells} sells</b> · Net flow <b>$${((c.buyVol - c.sellVol) / 1000).toFixed(0)}k</b></div>
+      <div style="margin-top:8px">${trades}</div>
+      <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px"><a href="https://www.capitoltrades.com/politicians" target="_blank" rel="noopener" style="color:var(--accent-amber);text-decoration:none">↗ View full activity on CapitolTrades</a></div>
+    </div>`;
   }
 
   const kronosScanBtn = document.getElementById('kronosScanBtn');
@@ -1814,6 +2015,17 @@ window.addEventListener('unhandledrejection', (e) => {
     if (!btn) return;
     if (kronosTickerInput) kronosTickerInput.value = btn.dataset.kq;
     kronosScan(btn.dataset.kq);
+  });
+  // Click any ticker in the Congressional overview to send it through Kronos.
+  const kronosCtOverview = document.getElementById('kronosCtOverview');
+  if (kronosCtOverview) kronosCtOverview.addEventListener('click', e => {
+    const row = e.target.closest('[data-ct-scan]');
+    if (!row) return;
+    const sym = row.dataset.ctScan;
+    if (kronosTickerInput) kronosTickerInput.value = sym;
+    kronosScan(sym);
+    const result = document.getElementById('kronosResult');
+    if (result) result.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
   // ============================================================
