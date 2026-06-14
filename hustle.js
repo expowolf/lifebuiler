@@ -1251,7 +1251,7 @@ window.addEventListener('unhandledrejection', (e) => {
         // requires a country/category param and is more limited).
         const newsapiUrl = 'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology%20OR%20business)&apiKey=' + encodeURIComponent(apiKey);
         const proxies = [
-          'https://corsproxy.io/?' + encodeURIComponent(newsapiUrl),
+          'https://corsproxy.io/?url=' + encodeURIComponent(newsapiUrl),
           'https://api.allorigins.win/raw?url=' + encodeURIComponent(newsapiUrl),
         ];
         let raw = null;
@@ -1547,6 +1547,34 @@ window.addEventListener('unhandledrejection', (e) => {
       fetch(url, opts).then(r => { clearTimeout(timer); resolve(r); }, err => { clearTimeout(timer); reject(err); });
     });
   }
+  // Ordered CORS-proxy candidates for a target URL. Direct first (works
+  // when the host sends CORS headers or the user has an unblocker), then
+  // three independent public proxies so one provider being down/rate-
+  // limited doesn't sink the whole scan. codetabs is the most reliable
+  // no-key proxy; corsproxy.io needs the ?url= form (was the silent bug);
+  // allorigins is slow but a useful last resort.
+  function kronosProxyUrls(target) {
+    return [
+      target,
+      'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(target),
+      'https://corsproxy.io/?url=' + encodeURIComponent(target),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(target),
+    ];
+  }
+  // Walk the proxy list; return parsed body ('json'|'text') or throw with
+  // the last error so callers can surface *why* it failed.
+  async function kronosFetchVia(target, parse, timeoutMs) {
+    let lastErr = 'no providers reachable';
+    for (const u of kronosProxyUrls(target)) {
+      try {
+        const res = await kronosFetchWithTimeout(u, timeoutMs || 10000);
+        if (!res || !res.ok) { lastErr = 'HTTP ' + (res ? res.status : '?'); continue; }
+        return parse === 'text' ? await res.text() : await res.json();
+      } catch (e) { lastErr = (e && e.message) || String(e); }
+    }
+    const err = new Error(lastErr); err.allFailed = true; throw err;
+  }
+  let kronosLastFetchError = ''; // surfaced in the failure card
   function kronosCongressAmount(amtStr) {
     // House Stock Watcher amount is a range string e.g. "$1,001 - $15,000"
     if (!amtStr) return 0;
@@ -1570,7 +1598,7 @@ window.addEventListener('unhandledrejection', (e) => {
     const today = new Date().toISOString().slice(0, 10);
     const url = 'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
     const tries = [url,
-      'https://corsproxy.io/?' + encodeURIComponent(url),
+      'https://corsproxy.io/?url=' + encodeURIComponent(url),
       'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
     kronosCongressInflight = (async () => {
       for (const u of tries) {
@@ -1673,47 +1701,43 @@ window.addEventListener('unhandledrejection', (e) => {
 
   async function kronosFetchCloses(ticker) {
     const sym = ticker.toUpperCase();
-    // ── Try Yahoo v8/chart first (works for every exchange Yahoo covers
-    //    — US, .TO Toronto, .L London, .DE XETRA, .HK Hong Kong, .T Tokyo,
-    //    .AX Australia, .PA Paris, .SW Switzerland, BTC-USD crypto, etc.)
-    const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=6mo`;
-    const urls = [chartUrl,
-      'https://corsproxy.io/?' + encodeURIComponent(chartUrl),
-      'https://api.allorigins.win/raw?url=' + encodeURIComponent(chartUrl)];
-    for (const url of urls) {
+    kronosLastFetchError = '';
+    // ── Yahoo v8/chart, query1 then query2 (covers every exchange Yahoo
+    //    serves — US, .TO Toronto, .L London, .DE XETRA, .HK Hong Kong,
+    //    .T Tokyo, .AX Australia, .PA Paris, .SW Switzerland, BTC-USD …)
+    for (const host of ['query1', 'query2']) {
+      const chartUrl = `https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=6mo`;
       try {
-        const res = await kronosFetchWithTimeout(url, 10000);
-        if (!res.ok) continue;
-        const j = await res.json();
+        const j = await kronosFetchVia(chartUrl, 'json', 10000);
         const r = j && j.chart && j.chart.result && j.chart.result[0];
         const closes = r && r.indicators && r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close;
         if (closes && closes.length) {
           const clean = closes.filter(c => typeof c === 'number' && isFinite(c));
           if (clean.length >= 30) return clean;
+          kronosLastFetchError = 'Yahoo returned only ' + clean.length + ' valid days';
+        } else if (j && j.chart && j.chart.error) {
+          kronosLastFetchError = 'Yahoo: ' + (j.chart.error.description || j.chart.error.code || 'unknown ticker');
         }
-      } catch (e) { /* try next */ }
+      } catch (e) { kronosLastFetchError = 'Yahoo unreachable (' + (e.message || e) + ')'; }
     }
-    // ── Fallback: Stooq CSV (reliable, no auth, broad exchange coverage
-    //    via suffix mapping — .US, .UK, .DE, .JP, .HK, .CA, .AU, etc.)
+    // ── Fallback: Stooq CSV (no auth, broad coverage via suffix mapping
+    //    .US/.UK/.DE/.JP/.HK/.CA/.AU). Header row = Date,Open,High,Low,Close,Volume
     const stooqSym = (sym.includes('.') ? sym : sym + '.US').toLowerCase();
     const stooqUrl = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=d`;
-    const stooqTries = [
-      'https://corsproxy.io/?' + encodeURIComponent(stooqUrl),
-      'https://api.allorigins.win/raw?url=' + encodeURIComponent(stooqUrl),
-    ];
-    for (const url of stooqTries) {
-      try {
-        const res = await kronosFetchWithTimeout(url, 10000);
-        if (!res.ok) continue;
-        const text = await res.text();
-        const lines = text.trim().split('\n');
-        if (lines.length < 31) continue; // need a header + 30 days
-        const closes = lines.slice(1).map(line => {
-          const cols = line.split(',');
-          return parseFloat(cols[4]); // Open,High,Low,Close,Volume → idx 4 = Close
-        }).filter(n => isFinite(n) && n > 0);
+    try {
+      const text = await kronosFetchVia(stooqUrl, 'text', 10000);
+      const lines = String(text).trim().split('\n');
+      if (lines.length >= 31 && /date/i.test(lines[0])) {
+        const closes = lines.slice(1)
+          .map(line => parseFloat(line.split(',')[4])) // idx 4 = Close
+          .filter(n => isFinite(n) && n > 0);
         if (closes.length >= 30) return closes.slice(-180); // last ~6mo
-      } catch (e) { /* try next */ }
+        kronosLastFetchError = 'Stooq returned only ' + closes.length + ' days';
+      } else {
+        kronosLastFetchError = 'No price data for "' + sym + '" on Yahoo or Stooq — check the ticker / exchange suffix';
+      }
+    } catch (e) {
+      if (!kronosLastFetchError) kronosLastFetchError = 'Stooq unreachable (' + (e.message || e) + ')';
     }
     return null;
   }
@@ -1829,7 +1853,7 @@ window.addEventListener('unhandledrejection', (e) => {
     if (!apiKey || detectNewsProvider(apiKey) !== 'newsapi') return [];
     const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(ticker)}&language=en&sortBy=publishedAt&pageSize=20&apiKey=${encodeURIComponent(apiKey)}`;
     const tries = [url,
-      'https://corsproxy.io/?' + encodeURIComponent(url),
+      'https://corsproxy.io/?url=' + encodeURIComponent(url),
       'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
     for (const u of tries) {
       try {
@@ -1925,42 +1949,59 @@ window.addEventListener('unhandledrejection', (e) => {
     const closes = await kronosFetchCloses(sym);
     if (!closes) {
       setKStatus('PRICE FEED FAILED');
-      out.innerHTML = '<div class="kronos-card" style="text-align:center;color:var(--accent-rose);font-size:13px">Couldn\'t load price history for ' + escapeHtml(sym) + ' — check the ticker and try again.</div>';
+      const detail = kronosLastFetchError
+        ? '<div style="font-size:11.5px;color:var(--muted-foreground);margin-top:8px;font-family:var(--font-mono)">' + escapeHtml(kronosLastFetchError) + '</div>'
+        : '';
+      out.innerHTML = '<div class="kronos-card" style="text-align:center;color:var(--accent-rose);font-size:13px">'
+        + 'Couldn\'t load price history for ' + escapeHtml(sym) + '.'
+        + detail
+        + '<div style="font-size:11px;color:var(--muted-foreground);margin-top:10px">If this keeps happening, the public CORS proxies may be rate-limited — wait a moment and scan again.</div>'
+        + '<button id="kronosRetryBtn" style="margin-top:12px;background:var(--primary);color:var(--primary-foreground,#000);border:1px solid var(--border);padding:9px 18px;border-radius:0.75rem;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">↻ Retry</button>'
+        + '</div>';
+      const retry = document.getElementById('kronosRetryBtn');
+      if (retry) retry.addEventListener('click', () => kronosScan(sym));
       return;
     }
-    const quant = kronosQuant(closes);
-
-    setKStatus('SCORING NEWS…');
-    const articles = await kronosFetchNews(sym);
-    const scored = articles.map(a => ({ ...a, ...kronosScoreArticle(a.headline, a.description) }));
-    const agg = kronosAggregate(scored, 7);
-
-    setKStatus('CHECKING CONGRESS…');
-    // Race Congress load against a 6s ceiling — if disclosures are slow
-    // or unreachable, proceed with quant + sentiment only. The composite
-    // weights already redistribute when Congress is missing.
     try {
-      await Promise.race([
-        kronosLoadCongress(false),
-        new Promise(resolve => setTimeout(resolve, 6000)),
-      ]);
-    } catch (e) { /* fall through with no Congress data */ }
-    const congress = kronosCongressForTicker(sym, 90);
+      const quant = kronosQuant(closes);
 
-    const b = kronosBoost(quant, agg);
-    // Layer Congressional smart-money on top of the news-boosted OU score.
-    const cBoost = kronosCongressBoost(b.boostedOu, congress);
-    b.boostedOu = cBoost.boosted;
-    b.congressBoost = cBoost.boost;
-    const composite = kronosComposite(b, quant, agg, congress);
-    const ts = kronosTradeSignal(composite, agg, congress);
-    const topHeadlines = scored.slice().sort((x, y) => y.confidence - x.confidence).slice(0, 3);
+      setKStatus('SCORING NEWS…');
+      const articles = await kronosFetchNews(sym);
+      const scored = articles.map(a => ({ ...a, ...kronosScoreArticle(a.headline, a.description) }));
+      const agg = kronosAggregate(scored, 7);
 
-    const signal = { sym, quant, agg, b, composite, ts, topHeadlines, hasNews: articles.length > 0, congress };
-    cacheAll[sym] = { ts: Date.now(), signal };
-    set(KRONOS_CACHE_KEY, cacheAll);
-    setKStatus('LIVE · ' + new Date().toLocaleTimeString());
-    kronosRender(signal);
+      setKStatus('CHECKING CONGRESS…');
+      // Race Congress load against a 6s ceiling — if disclosures are slow
+      // or unreachable, proceed with quant + sentiment only. The composite
+      // weights already redistribute when Congress is missing.
+      try {
+        await Promise.race([
+          kronosLoadCongress(false),
+          new Promise(resolve => setTimeout(resolve, 6000)),
+        ]);
+      } catch (e) { /* fall through with no Congress data */ }
+      const congress = kronosCongressForTicker(sym, 90);
+
+      const b = kronosBoost(quant, agg);
+      // Layer Congressional smart-money on top of the news-boosted OU score.
+      const cBoost = kronosCongressBoost(b.boostedOu, congress);
+      b.boostedOu = cBoost.boosted;
+      b.congressBoost = cBoost.boost;
+      const composite = kronosComposite(b, quant, agg, congress);
+      const ts = kronosTradeSignal(composite, agg, congress);
+      const topHeadlines = scored.slice().sort((x, y) => y.confidence - x.confidence).slice(0, 3);
+
+      const signal = { sym, quant, agg, b, composite, ts, topHeadlines, hasNews: articles.length > 0, congress };
+      cacheAll[sym] = { ts: Date.now(), signal };
+      set(KRONOS_CACHE_KEY, cacheAll);
+      setKStatus('LIVE · ' + new Date().toLocaleTimeString());
+      kronosRender(signal);
+    } catch (e) {
+      console.error('[kronos] scan failed:', e);
+      setKStatus('SCAN ERROR');
+      out.innerHTML = '<div class="kronos-card" style="text-align:center;color:var(--accent-rose);font-size:13px">Kronos hit an error processing ' + escapeHtml(sym)
+        + '<div style="font-size:11.5px;color:var(--muted-foreground);margin-top:8px;font-family:var(--font-mono)">' + escapeHtml((e && e.message) || String(e)) + '</div></div>';
+    }
   }
 
   function kronosRender(s) {

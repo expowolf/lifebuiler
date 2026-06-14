@@ -2036,7 +2036,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=2d`;
     const urls = [
       chartUrl, // try direct first (works on some networks)
-      'https://corsproxy.io/?' + encodeURIComponent(chartUrl),
+      'https://corsproxy.io/?url=' + encodeURIComponent(chartUrl),
       'https://api.allorigins.win/raw?url=' + encodeURIComponent(chartUrl),
     ];
     for (const url of urls) {
@@ -2064,7 +2064,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     if (!sym) return null;
     const stooqSym = sym.includes('.') ? sym.toLowerCase() : (sym.toLowerCase() + '.us');
     const url = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`;
-    const proxied = 'https://corsproxy.io/?' + encodeURIComponent(url);
+    const proxied = 'https://corsproxy.io/?url=' + encodeURIComponent(url);
     try {
       const res = await fetch(proxied);
       if (!res.ok) return null;
