@@ -3,49 +3,68 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<meta name="theme-color" content="#050506" />
+<meta name="theme-color" content="#000000" />
 <title>Hustle — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg-deep: #04050A;
-    --bg-card: rgba(255,255,255,0.035);
-    --bg-glass: rgba(13,15,24,0.55);
-    --border-soft: rgba(255,255,255,0.06);
-    --border-mid: rgba(255,255,255,0.10);
-    --text-primary: #FAFAFA;
-    --text-secondary: #B8B6B0;
-    --text-tertiary: #76746E;
-    --text-quaternary: #4D4B47;
-    --accent-blue: #7DD3FC;
-    --accent-mint: #6EE7B7;
-    --accent-amber: #F2C063;
-    --accent-rose: #FF8A8A;
-    --accent-purple: #B794F4;
-    --accent-cyan: #5EEAD4;
-    --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    /* ── New theme tokens (dark variant, default) ── */
+    --card: #1a212b;
+    --background: #000000;
+    --foreground: #ffffff;
+    --primary: #818cf8;
+    --secondary: #2dd4bf;
+    --accent: #fcd34d;
+    --muted: #333333;
+    --muted-foreground: #cccccc;
+    --border: #545454;
+    --destructive: #f87171;
+    --chart-1: #818cf8;
+    --chart-2: #2dd4bf;
+    --chart-3: #fcd34d;
+    --chart-4: #f472b6;
+    --chart-5: #4ade80;
+    --radius: 1rem;
+
+    /* ── Backward-compat aliases so existing rules pick up the theme ── */
+    --bg-deep: var(--background);
+    --bg-card: var(--card);
+    --bg-glass: var(--card);
+    --border-soft: var(--border);
+    --border-mid: var(--border);
+    --text-primary: var(--foreground);
+    --text-secondary: var(--muted-foreground);
+    --text-tertiary: #888888;
+    --text-quaternary: #555555;
+    --accent-blue: var(--primary);
+    --accent-mint: var(--secondary);
+    --accent-amber: var(--accent);
+    --accent-rose: var(--destructive);
+    --accent-purple: var(--chart-4);
+    --accent-cyan: var(--chart-2);
+    --font: "DM Sans", -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Space Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     color-scheme: dark;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { min-height: 100vh; background: var(--bg-deep); color: var(--text-primary); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+  html, body { min-height: 100vh; background: var(--background); color: var(--foreground); font-family: var(--font); -webkit-font-smoothing: antialiased; }
   html, body { scrollbar-width: none; -ms-overflow-style: none; }
   *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
-  /* ===== Ambient backdrop (static gradient — no expensive filters) ===== */
+  /* ===== Ambient backdrop — flat black with subtle theme glow ===== */
   body::before {
     content: '';
     position: fixed; inset: 0;
     background:
-      radial-gradient(40% 30% at 78% 12%, rgba(125,211,252,0.08), transparent 60%),
-      radial-gradient(45% 35% at 18% 88%, rgba(183,148,244,0.06), transparent 60%),
-      linear-gradient(180deg, #050610 0%, #03040A 100%);
+      radial-gradient(45% 30% at 78% 12%, rgba(129,140,248,0.08), transparent 60%),
+      radial-gradient(45% 35% at 18% 88%, rgba(45,212,191,0.05), transparent 60%),
+      linear-gradient(180deg, #000000 0%, #000000 100%);
     pointer-events: none;
     z-index: -3;
   }
-  /* Grain + scanlines removed — they triggered constant repaints and were
-     a major source of lag on mobile. The flat radial backdrop above keeps
-     the cinematic feel without the perf cost. */
   .scanlines { display: none; }
 
   /* ===== Top bar ===== */
@@ -1822,19 +1841,21 @@
         <div style="font-family:var(--font-mono);font-size:9.5px;color:var(--text-tertiary);letter-spacing:0.12em;text-transform:uppercase" id="kronosStatus">STANDBY</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <input type="text" id="kronosTicker" placeholder="Ticker (PLTR)" style="text-transform:uppercase;flex:0 0 130px;background:rgba(0,0,0,0.35);border:1px solid var(--border-mid);color:var(--text-primary);padding:10px 13px;font-family:var(--font-mono);font-size:13px;border-radius:9px;outline:none" />
-        <button id="kronosScanBtn" style="background:linear-gradient(180deg,var(--accent-purple),#9F7AEA);color:#13052A;border:none;padding:10px 20px;border-radius:9px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:0.04em">SCAN</button>
+        <input type="text" id="kronosTicker" placeholder="Any ticker — AAPL, SHOP.TO, HSBA.L, BTC-USD" style="text-transform:uppercase;flex:1 1 220px;min-width:180px;background:#000;border:1px solid var(--border);color:var(--foreground);padding:11px 14px;font-family:var(--font-mono);font-size:13px;border-radius:0.75rem;outline:none" />
+        <button id="kronosScanBtn" style="background:var(--primary);color:var(--primary-foreground,#000);border:1px solid var(--border);padding:11px 22px;border-radius:0.75rem;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:0.02em">SCAN</button>
         <div class="trade-pill-row" id="kronosQuickRow" style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="trade-quick" data-kq="PLTR">PLTR</button>
           <button class="trade-quick" data-kq="TSLA">TSLA</button>
           <button class="trade-quick" data-kq="NVDA">NVDA</button>
           <button class="trade-quick" data-kq="AAPL">AAPL</button>
-          <button class="trade-quick" data-kq="LULU">LULU</button>
-          <button class="trade-quick" data-kq="MARA">MARA</button>
+          <button class="trade-quick" data-kq="SHOP.TO">SHOP.TO</button>
+          <button class="trade-quick" data-kq="HSBA.L">HSBA.L</button>
+          <button class="trade-quick" data-kq="7203.T">7203.T</button>
+          <button class="trade-quick" data-kq="BTC-USD">BTC</button>
         </div>
       </div>
-      <div style="font-size:11px;color:var(--text-tertiary);margin-top:10px;line-height:1.5">
-        Four quant engines (OU mean-reversion · regime detection · trend filter · tail risk) computed from 6 months of price history, boosted by news sentiment scored locally — no extra API credits. News uses your globe feed key; without one, the signal runs on pure quant.
+      <div style="font-size:11.5px;color:var(--muted-foreground);margin-top:10px;line-height:1.6">
+        Works on every exchange Yahoo Finance covers: US (<code style="font-family:var(--font-mono);font-size:10.5px">AAPL</code>), Canada (<code style="font-family:var(--font-mono);font-size:10.5px">.TO</code>), London (<code style="font-family:var(--font-mono);font-size:10.5px">.L</code>), Xetra (<code style="font-family:var(--font-mono);font-size:10.5px">.DE</code>), Tokyo (<code style="font-family:var(--font-mono);font-size:10.5px">.T</code>), Hong Kong (<code style="font-family:var(--font-mono);font-size:10.5px">.HK</code>), Australia (<code style="font-family:var(--font-mono);font-size:10.5px">.AX</code>), Paris (<code style="font-family:var(--font-mono);font-size:10.5px">.PA</code>), Switzerland (<code style="font-family:var(--font-mono);font-size:10.5px">.SW</code>), plus crypto (<code style="font-family:var(--font-mono);font-size:10.5px">BTC-USD</code>). Falls back to Stooq if Yahoo blocks the proxy. Four quant engines × news sentiment × Congressional flow.
       </div>
     </div>
 
