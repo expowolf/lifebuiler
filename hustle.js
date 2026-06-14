@@ -1534,6 +1534,19 @@ window.addEventListener('unhandledrejection', (e) => {
   //     in memory + a lightweight day-key flag in localStorage so we
   //     only redownload once every 24h. ─────────────────────────
   let kronosCongressData = null; // { trades: [...], stamp: ts }
+  let kronosCongressInflight = null; // dedup concurrent loads
+  // Wrap fetch with a timeout so a slow proxy can't hang the whole scan.
+  function kronosFetchWithTimeout(url, ms) {
+    return new Promise((resolve, reject) => {
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const opts = ctrl ? { signal: ctrl.signal } : {};
+      const timer = setTimeout(() => {
+        if (ctrl) try { ctrl.abort(); } catch (e) {}
+        reject(new Error('timeout'));
+      }, ms);
+      fetch(url, opts).then(r => { clearTimeout(timer); resolve(r); }, err => { clearTimeout(timer); reject(err); });
+    });
+  }
   function kronosCongressAmount(amtStr) {
     // House Stock Watcher amount is a range string e.g. "$1,001 - $15,000"
     if (!amtStr) return 0;
@@ -1550,43 +1563,47 @@ window.addEventListener('unhandledrejection', (e) => {
     if (kronosCongressData && !force) {
       if (Date.now() - kronosCongressData.stamp < KRONOS_CONGRESS_TTL_MS) return kronosCongressData;
     }
-    const cachedDay = get(KRONOS_CONGRESS_KEY, null);
+    // Dedup concurrent calls — if a load is already in flight (e.g. fired
+    // by the tab-open hook), return that same promise instead of starting
+    // a second 8MB download.
+    if (kronosCongressInflight) return kronosCongressInflight;
     const today = new Date().toISOString().slice(0, 10);
-    // House Stock Watcher's all-transactions S3 file. CapitolTrades
-    // aggregates the same filings; using the public dataset means
-    // zero credit cost + works offline of any provider.
     const url = 'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
     const tries = [url,
       'https://corsproxy.io/?' + encodeURIComponent(url),
       'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
-    for (const u of tries) {
-      try {
-        const res = await fetch(u);
-        if (!res.ok) continue;
-        const arr = await res.json();
-        if (!Array.isArray(arr)) continue;
-        // Trim to last 180 days so we don't carry 8MB in memory.
-        const cutoff = Date.now() - 180 * 86400000;
-        const trades = arr.filter(t => {
-          const d = Date.parse(t.transaction_date || t.disclosure_date || '');
-          return isFinite(d) && d >= cutoff && t.ticker && t.ticker !== '--';
-        }).map(t => ({
-          ticker: String(t.ticker || '').toUpperCase().replace(/^\$/, ''),
-          who: t.representative || '',
-          date: t.transaction_date || t.disclosure_date || '',
-          ts: Date.parse(t.transaction_date || t.disclosure_date || '') || 0,
-          type: t.type || '',
-          amount: kronosCongressAmount(t.amount),
-          amountRange: t.amount || '',
-          link: t.ptr_link || '',
-        }));
-        kronosCongressData = { trades, stamp: Date.now() };
-        set(KRONOS_CONGRESS_KEY, today);
-        return kronosCongressData;
-      } catch (e) { /* try next */ }
-    }
-    kronosCongressData = kronosCongressData || { trades: [], stamp: Date.now() };
-    return kronosCongressData;
+    kronosCongressInflight = (async () => {
+      for (const u of tries) {
+        try {
+          const res = await kronosFetchWithTimeout(u, 12000); // 12s per attempt
+          if (!res.ok) continue;
+          const arr = await res.json();
+          if (!Array.isArray(arr)) continue;
+          // Trim to last 180 days so we don't carry 8MB in memory.
+          const cutoff = Date.now() - 180 * 86400000;
+          const trades = arr.filter(t => {
+            const d = Date.parse(t.transaction_date || t.disclosure_date || '');
+            return isFinite(d) && d >= cutoff && t.ticker && t.ticker !== '--';
+          }).map(t => ({
+            ticker: String(t.ticker || '').toUpperCase().replace(/^\$/, ''),
+            who: t.representative || '',
+            date: t.transaction_date || t.disclosure_date || '',
+            ts: Date.parse(t.transaction_date || t.disclosure_date || '') || 0,
+            type: t.type || '',
+            amount: kronosCongressAmount(t.amount),
+            amountRange: t.amount || '',
+            link: t.ptr_link || '',
+          }));
+          kronosCongressData = { trades, stamp: Date.now() };
+          set(KRONOS_CONGRESS_KEY, today);
+          return kronosCongressData;
+        } catch (e) { /* try next */ }
+      }
+      kronosCongressData = kronosCongressData || { trades: [], stamp: Date.now(), failed: true };
+      return kronosCongressData;
+    })();
+    try { return await kronosCongressInflight; }
+    finally { kronosCongressInflight = null; }
   }
   function kronosCongressForTicker(sym, daysBack) {
     if (!kronosCongressData || !sym) return null;
@@ -1656,13 +1673,16 @@ window.addEventListener('unhandledrejection', (e) => {
 
   async function kronosFetchCloses(ticker) {
     const sym = ticker.toUpperCase();
+    // ── Try Yahoo v8/chart first (works for every exchange Yahoo covers
+    //    — US, .TO Toronto, .L London, .DE XETRA, .HK Hong Kong, .T Tokyo,
+    //    .AX Australia, .PA Paris, .SW Switzerland, BTC-USD crypto, etc.)
     const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=6mo`;
     const urls = [chartUrl,
       'https://corsproxy.io/?' + encodeURIComponent(chartUrl),
       'https://api.allorigins.win/raw?url=' + encodeURIComponent(chartUrl)];
     for (const url of urls) {
       try {
-        const res = await fetch(url);
+        const res = await kronosFetchWithTimeout(url, 10000);
         if (!res.ok) continue;
         const j = await res.json();
         const r = j && j.chart && j.chart.result && j.chart.result[0];
@@ -1671,6 +1691,28 @@ window.addEventListener('unhandledrejection', (e) => {
           const clean = closes.filter(c => typeof c === 'number' && isFinite(c));
           if (clean.length >= 30) return clean;
         }
+      } catch (e) { /* try next */ }
+    }
+    // ── Fallback: Stooq CSV (reliable, no auth, broad exchange coverage
+    //    via suffix mapping — .US, .UK, .DE, .JP, .HK, .CA, .AU, etc.)
+    const stooqSym = (sym.includes('.') ? sym : sym + '.US').toLowerCase();
+    const stooqUrl = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=d`;
+    const stooqTries = [
+      'https://corsproxy.io/?' + encodeURIComponent(stooqUrl),
+      'https://api.allorigins.win/raw?url=' + encodeURIComponent(stooqUrl),
+    ];
+    for (const url of stooqTries) {
+      try {
+        const res = await kronosFetchWithTimeout(url, 10000);
+        if (!res.ok) continue;
+        const text = await res.text();
+        const lines = text.trim().split('\n');
+        if (lines.length < 31) continue; // need a header + 30 days
+        const closes = lines.slice(1).map(line => {
+          const cols = line.split(',');
+          return parseFloat(cols[4]); // Open,High,Low,Close,Volume → idx 4 = Close
+        }).filter(n => isFinite(n) && n > 0);
+        if (closes.length >= 30) return closes.slice(-180); // last ~6mo
       } catch (e) { /* try next */ }
     }
     return null;
@@ -1894,7 +1936,15 @@ window.addEventListener('unhandledrejection', (e) => {
     const agg = kronosAggregate(scored, 7);
 
     setKStatus('CHECKING CONGRESS…');
-    await kronosLoadCongress(false);
+    // Race Congress load against a 6s ceiling — if disclosures are slow
+    // or unreachable, proceed with quant + sentiment only. The composite
+    // weights already redistribute when Congress is missing.
+    try {
+      await Promise.race([
+        kronosLoadCongress(false),
+        new Promise(resolve => setTimeout(resolve, 6000)),
+      ]);
+    } catch (e) { /* fall through with no Congress data */ }
     const congress = kronosCongressForTicker(sym, 90);
 
     const b = kronosBoost(quant, agg);
