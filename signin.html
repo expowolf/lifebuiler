@@ -172,6 +172,10 @@
 
   <div class="msg" id="msgEl"></div>
 
+  <div id="forgotWrap" style="text-align:center;margin-top:10px">
+    <a id="forgotLink" style="color:#7DD3FC;text-decoration:none;font-weight:600;font-size:12.5px;cursor:pointer">Forgot password?</a>
+  </div>
+
   <div class="switch-mode" id="switchEl">
     Don't have an account? <a id="toggleMode">Create one</a>
   </div>
@@ -183,13 +187,32 @@
   const SUPABASE_URL = 'https://cmycjvfegyzhzfxxakpl.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_6L-ExMekosUH-SotO-hlgg_WKNSKRpW';
 
+  // Detect the recovery hash BEFORE Supabase processes & strips it — we
+  // need to know if this load is a password-reset click so we don't
+  // bounce straight to the dashboard.
+  const isRecovery = (window.location.hash || '').includes('type=recovery');
+
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true },
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   });
 
-  // Already signed in? Skip to dashboard.
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session) window.location.replace('dashboard.html');
+  let mode = isRecovery ? 'newpassword' : 'signin'; // signin | signup | reset | newpassword
+
+  // Listen for the recovery event so we definitely catch it even if the
+  // hash-detection above misses for any reason.
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      mode = 'newpassword';
+      msgEl.textContent = '';
+      refreshUI();
+    }
+  });
+
+  // Already signed in? Skip to dashboard — but NOT during a recovery flow.
+  if (!isRecovery) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) window.location.replace('dashboard.html');
+  }
 
   const emailInput  = document.getElementById('emailInput');
   const passInput   = document.getElementById('passwordInput');
@@ -197,34 +220,133 @@
   const msgEl       = document.getElementById('msgEl');
   const subtitleEl  = document.getElementById('subtitleEl');
   const switchEl    = document.getElementById('switchEl');
-  const toggleLink  = document.getElementById('toggleMode');
-
-  let mode = 'signin'; // or 'signup'
+  const forgotWrap  = document.getElementById('forgotWrap');
+  const forgotLink  = document.getElementById('forgotLink');
+  const emailLabel  = document.querySelector('label[for="emailInput"]');
+  const passLabel   = document.querySelector('label[for="passwordInput"]');
 
   function refreshUI() {
+    // Reset visibility every render so toggling modes works cleanly.
+    emailInput.style.display = '';
+    passInput.style.display = '';
+    emailLabel.style.display = '';
+    passLabel.style.display = '';
+    forgotWrap.style.display = '';
+    switchEl.style.display = '';
+    passInput.value = '';
+
     if (mode === 'signin') {
       submitBtn.textContent = 'Sign in';
       subtitleEl.textContent = 'Sign in to sync your data across devices.';
       switchEl.innerHTML = `Don't have an account? <a id="toggleMode">Create one</a>`;
       passInput.setAttribute('autocomplete', 'current-password');
-    } else {
+      passInput.setAttribute('placeholder', '••••••••');
+    } else if (mode === 'signup') {
       submitBtn.textContent = 'Create account';
       subtitleEl.textContent = 'Pick any email + password. Use the same on every device.';
       switchEl.innerHTML = `Already have an account? <a id="toggleMode">Sign in</a>`;
       passInput.setAttribute('autocomplete', 'new-password');
+      passInput.setAttribute('placeholder', '••••••••');
+    } else if (mode === 'reset') {
+      submitBtn.textContent = 'Send reset email';
+      subtitleEl.textContent = "Enter your email and we'll send a link to set a new password.";
+      passInput.style.display = 'none';
+      passLabel.style.display = 'none';
+      forgotWrap.style.display = 'none';
+      switchEl.innerHTML = `Remembered it? <a id="toggleMode">Back to sign in</a>`;
+    } else if (mode === 'newpassword') {
+      submitBtn.textContent = 'Set new password';
+      subtitleEl.textContent = 'Enter a new password for your account.';
+      emailInput.style.display = 'none';
+      emailLabel.style.display = 'none';
+      forgotWrap.style.display = 'none';
+      switchEl.style.display = 'none';
+      passInput.setAttribute('autocomplete', 'new-password');
+      passInput.setAttribute('placeholder', 'New password (min 6 chars)');
+      setTimeout(() => passInput.focus(), 50);
     }
-    document.getElementById('toggleMode').addEventListener('click', () => {
-      mode = mode === 'signin' ? 'signup' : 'signin';
+
+    // Re-bind the toggle link each render (innerHTML replaces the node).
+    const tl = document.getElementById('toggleMode');
+    if (tl) tl.addEventListener('click', () => {
+      mode = (mode === 'signin' || mode === 'reset') ? 'signup' : 'signin';
+      // From 'reset' specifically, go back to signin (not signup).
+      // Handled by the explicit text "Back to sign in" above.
+      if (switchEl.textContent.includes('Back to sign in')) mode = 'signin';
       msgEl.textContent = '';
       refreshUI();
     });
   }
   refreshUI();
-  emailInput.focus();
+  if (mode === 'signin') emailInput.focus();
+
+  forgotLink.addEventListener('click', () => {
+    mode = 'reset';
+    msgEl.textContent = '';
+    refreshUI();
+    emailInput.focus();
+  });
 
   async function submit() {
     const email = emailInput.value.trim();
     const password = passInput.value;
+
+    // ── Recovery: only password matters ──
+    if (mode === 'newpassword') {
+      if (!password || password.length < 6) {
+        msgEl.textContent = 'Password must be at least 6 characters.';
+        msgEl.className = 'msg error';
+        return;
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving…';
+      msgEl.textContent = ''; msgEl.className = 'msg';
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        msgEl.textContent = error.message || 'Could not update password.';
+        msgEl.className = 'msg error';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Set new password';
+        return;
+      }
+      msgEl.textContent = '✓ Password updated. Signing you in…';
+      msgEl.className = 'msg success';
+      // Clear the recovery hash before redirecting.
+      history.replaceState(null, '', window.location.pathname);
+      setTimeout(() => window.location.replace('dashboard.html'), 600);
+      return;
+    }
+
+    // ── Reset: only email matters ──
+    if (mode === 'reset') {
+      if (!email || !email.includes('@')) {
+        msgEl.textContent = 'Enter a valid email.';
+        msgEl.className = 'msg error';
+        return;
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Sending…';
+      msgEl.textContent = ''; msgEl.className = 'msg';
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        // Land back on this same signin page; the recovery hash will
+        // flip us into newpassword mode automatically.
+        redirectTo: window.location.origin + window.location.pathname,
+      });
+      if (error) {
+        msgEl.textContent = error.message || 'Could not send reset email.';
+        msgEl.className = 'msg error';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send reset email';
+        return;
+      }
+      msgEl.textContent = "✓ Check your email for the reset link (also check spam).";
+      msgEl.className = 'msg success';
+      submitBtn.textContent = 'Send reset email';
+      submitBtn.disabled = false;
+      return;
+    }
+
+    // ── Sign in / Sign up ──
     if (!email || !email.includes('@')) {
       msgEl.textContent = 'Enter a valid email.';
       msgEl.className = 'msg error';
@@ -257,7 +379,6 @@
     }
 
     if (mode === 'signup' && !res.data.session) {
-      // Email confirmation is enabled in Supabase — user needs to verify
       msgEl.textContent = '✓ Account created. Check your email to confirm, then sign in.';
       msgEl.className = 'msg success';
       submitBtn.disabled = false;
@@ -274,7 +395,13 @@
 
   submitBtn.addEventListener('click', submit);
   passInput.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
-  emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') passInput.focus(); });
+  emailInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      // In reset mode there's no password field, so submit directly.
+      if (mode === 'reset') submit();
+      else passInput.focus();
+    }
+  });
 </script>
 </body>
 </html>
