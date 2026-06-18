@@ -824,6 +824,16 @@ window.addEventListener('unhandledrejection', (e) => {
       }
       // Pull fresh data if a key is set
       if (apiKey) fetchNews();
+
+      // Attach the country-border + metric layer now that the globe
+      // actually exists (this is why borders/ratings weren't showing —
+      // the old timeout fired before the globe was initialised).
+      ensureBorderLayer().then(() => {
+        const c = get(KEYS.newsCache, null);
+        if (c && c.events) computeCountryMetrics(c.events);
+        else computeCountryMetrics(SAMPLE_NEWS);
+        applyMetricLayer();
+      }).catch(e => console.warn('[borders] attach failed:', e));
     } catch (e) {
       console.error('initGlobeIfNeeded failed:', e);
     }
@@ -1057,15 +1067,26 @@ window.addEventListener('unhandledrejection', (e) => {
   }
   async function loadCountryBorders() {
     if (countryFeatures) return countryFeatures;
-    // Datasets-org countries.geojson — small (~220KB), CC0, ships ISO_A2.
-    const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
-    try {
-      const j = await kronosFetchVia(url, 'json', 12000);
-      if (j && Array.isArray(j.features)) {
-        countryFeatures = j.features;
-        return countryFeatures;
-      }
-    } catch (e) { console.warn('[borders] load failed:', e.message); }
+    // Natural Earth 110m country polygons — the same small (~250KB) dataset
+    // globe.gl ships in its own polygon examples. Ships ISO_A2. Try a few
+    // mirrors so a single host being down doesn't kill the border layer.
+    const sources = [
+      'https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson',
+      'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson',
+      'https://unpkg.com/world-atlas@2/countries-110m.json', // topojson fallback (handled below)
+    ];
+    for (const url of sources) {
+      try {
+        const j = await kronosFetchVia(url, 'json', 12000);
+        if (j && Array.isArray(j.features) && j.features.length) {
+          countryFeatures = j.features;
+          return countryFeatures;
+        }
+        // world-atlas is TopoJSON — only usable if the topojson client is
+        // present; skip quietly if not (the first two are plain GeoJSON).
+      } catch (e) { console.warn('[borders] source failed:', url, e.message); }
+    }
+    console.warn('[borders] all sources failed');
     return null;
   }
   async function ensureBorderLayer() {
@@ -1117,7 +1138,87 @@ window.addEventListener('unhandledrejection', (e) => {
           + '<span class="globe-metric-legend-dot" style="background:rgb(248,113,113);margin-left:6px"></span>CRITICAL';
       }
     }
+    renderThreatBoard();
   }
+
+  // ── Threat Board: ranked severity for the active metric. Pulls the
+  //    top countries by score (live news on top of baseline), color-
+  //    coded, with a global threat level summarising the field. Clicking
+  //    a row flies the globe to that country.
+  const ISO_LATLON = {
+    ua:[48.4,31.2],ru:[61.5,105.3],sy:[35.0,38.0],ye:[15.6,48.0],af:[33.9,67.7],ir:[32.4,53.7],
+    iq:[33.2,43.7],lb:[33.9,35.5],il:[31.0,34.9],ps:[31.9,35.2],sd:[12.9,30.2],et:[9.1,40.5],
+    ng:[9.1,8.7],cd:[-4.0,21.8],so:[5.2,46.2],cn:[35.9,104.2],kr:[35.9,127.8],kp:[40.3,127.5],
+    jp:[36.2,138.3],in:[20.6,79.0],pk:[30.4,69.3],us:[39.8,-98.6],mx:[23.6,-102.6],br:[-14.2,-51.9],
+    ve:[6.4,-66.6],co:[4.6,-74.3],gb:[55.4,-3.4],fr:[46.2,2.2],de:[51.2,10.5],tr:[39.0,35.2],
+    eg:[26.8,30.8],sa:[23.9,45.1],za:[-30.6,22.9],ke:[-0.0,37.9],
+  };
+  function renderThreatBoard() {
+    const board = document.getElementById('threatBoard');
+    const list = document.getElementById('threatBoardList');
+    const titleEl = document.getElementById('threatBoardTitle');
+    const levelEl = document.getElementById('threatBoardLevel');
+    if (!board || !list) return;
+    if (currentMetric === 'off') { board.style.display = 'none'; return; }
+    board.style.display = '';
+    const icons = { war:'⚔', economics:'$', social:'☯', political:'⚖' };
+    const labels = { war:'War / Conflict', economics:'Economic Risk', social:'Social Strain', political:'Political Risk' };
+    if (titleEl) titleEl.textContent = (icons[currentMetric] || '◉') + ' ' + (labels[currentMetric] || currentMetric);
+
+    // Merge baseline + live, rank by the active metric.
+    const merged = {};
+    Object.keys(METRIC_BASELINE).forEach(k => merged[k] = METRIC_BASELINE[k][currentMetric]);
+    Object.keys(countryMetrics).forEach(k => {
+      if (countryMetrics[k] && countryMetrics[k][currentMetric] != null) merged[k] = countryMetrics[k][currentMetric];
+    });
+    const rows = Object.keys(merged)
+      .map(iso => ({ iso, score: merged[iso] }))
+      .filter(r => r.score != null)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+
+    // Global threat level = mean of the top field.
+    const avg = rows.length ? rows.reduce((s, r) => s + r.score, 0) / rows.length : 0;
+    if (levelEl) {
+      const lvl = avg >= 70 ? ['CRITICAL', 'rgb(248,113,113)'] : avg >= 45 ? ['ELEVATED', 'rgb(252,211,77)'] : ['STABLE', 'rgb(74,222,128)'];
+      levelEl.textContent = lvl[0];
+      levelEl.style.color = lvl[1];
+      levelEl.style.background = lvl[1].replace('rgb', 'rgba').replace(')', ',0.12)');
+    }
+    list.innerHTML = rows.map((r, i) => {
+      const name = ISO_NAMES[r.iso] || r.iso.toUpperCase();
+      const col = metricColor(r.score).replace(/0\.\d+\)$/, '1)');
+      return `<div class="threat-row" data-iso="${r.iso}">
+        <span class="threat-rank">${i + 1}</span>
+        <span class="threat-name">${escapeHtml(name)}</span>
+        <span class="threat-meter">
+          <span class="threat-meter-bar"><span class="threat-meter-fill" style="width:${r.score.toFixed(0)}%;background:${col}"></span></span>
+          <span style="color:${col}">${r.score.toFixed(0)}</span>
+        </span>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.threat-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const ll = ISO_LATLON[row.dataset.iso];
+        if (ll && globeInstance && globeInstance.pointOfView) {
+          globeInstance.pointOfView({ lat: ll[0], lng: ll[1], altitude: 1.6 }, 1200);
+        }
+      });
+    });
+  }
+  // Minimal ISO-2 → display-name map for the board (covers the baseline set).
+  const ISO_NAMES = {
+    ua:'Ukraine',ru:'Russia',sy:'Syria',ye:'Yemen',af:'Afghanistan',ir:'Iran',iq:'Iraq',lb:'Lebanon',
+    il:'Israel',ps:'Palestine',sd:'Sudan',et:'Ethiopia',ng:'Nigeria',cd:'DR Congo',so:'Somalia',
+    my:'Malaysia',cn:'China',kr:'South Korea',kp:'North Korea',jp:'Japan',in:'India',pk:'Pakistan',
+    bd:'Bangladesh',id:'Indonesia',ph:'Philippines',vn:'Vietnam',th:'Thailand',tw:'Taiwan',
+    sg:'Singapore',au:'Australia',nz:'New Zealand',us:'United States',ca:'Canada',mx:'Mexico',
+    br:'Brazil',ar:'Argentina',cl:'Chile',co:'Colombia',ve:'Venezuela',pe:'Peru',ec:'Ecuador',
+    gb:'United Kingdom',fr:'France',de:'Germany',es:'Spain',it:'Italy',nl:'Netherlands',be:'Belgium',
+    ch:'Switzerland',se:'Sweden',no:'Norway',fi:'Finland',dk:'Denmark',pl:'Poland',cz:'Czechia',
+    hu:'Hungary',ro:'Romania',gr:'Greece',pt:'Portugal',ie:'Ireland',tr:'Türkiye',eg:'Egypt',
+    sa:'Saudi Arabia',ae:'UAE',qa:'Qatar',za:'South Africa',ke:'Kenya',ma:'Morocco',dz:'Algeria',
+  };
   // Wire the metric selector buttons.
   document.querySelectorAll('.globe-metric-btn').forEach(btn => {
     btn.addEventListener('click', () => {
