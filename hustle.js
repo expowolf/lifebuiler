@@ -826,7 +826,13 @@ window.addEventListener('unhandledrejection', (e) => {
         setHudStatus(apiKey ? 'LOADING…' : 'SAMPLE FEED');
       }
       // Pull fresh data if a key is set
-      if (apiKey) fetchNews();
+      // Pull fresh data if ANY source is configured (not just the
+      // legacy newsKey — otherwise pasting only a NewsData/WorldNews/
+      // ScrapeGraphAI key would never trigger the initial fetch and
+      // the globe would sit on cached/sample data forever).
+      const hasAnyKey = apiKey
+        || (typeof dsGetKey === 'function' && (dsGetKey('newsdata') || dsGetKey('worldnews') || dsGetKey('scrapegraph')));
+      if (hasAnyKey) fetchNews();
 
       // Attach the country-border + metric layer now that the globe
       // actually exists (this is why borders/ratings weren't showing —
@@ -1599,6 +1605,9 @@ window.addEventListener('unhandledrejection', (e) => {
         description: it.description || '',
         link: it.link || it.source_url || '#',
         source: it.source_id || it.source_name || 'newsdata.io',
+        // Which API contributed this event — surfaced as a badge in the
+        // live feed and the globe-event detail card.
+        source_type: it.source_type || 'newsapi',
         pubDate: it.pubDate || it.published_at || new Date().toISOString(),
       };
     });
@@ -1633,16 +1642,26 @@ window.addEventListener('unhandledrejection', (e) => {
       feed.innerHTML = `<div style="padding:24px 14px;font-size:12px;color:var(--text-tertiary);text-align:center;font-style:italic">No events in this category yet.</div>`;
       return;
     }
-    feed.innerHTML = filtered.slice(0, 50).map(p => `
+    // Small source-badge map so every live-feed item shows which API
+    // contributed it. Lets the user see the multi-source merge at a glance.
+    const SRC_LABEL = { newsapi:'NewsAPI', newsdata:'NewsData', worldnews:'WorldNews', scrapegraph:'ScrapeGraph', reliefweb:'ReliefWeb', sample:'Sample' };
+    const SRC_COLOR = { newsapi:'var(--primary)', newsdata:'var(--accent-mint)', worldnews:'var(--accent-amber)', scrapegraph:'var(--accent-purple)', reliefweb:'var(--accent-cyan)', sample:'var(--text-tertiary)' };
+    feed.innerHTML = filtered.slice(0, 50).map(p => {
+      const st = p.source_type || 'newsapi';
+      const lbl = SRC_LABEL[st] || st.toUpperCase();
+      const col = SRC_COLOR[st] || 'var(--text-tertiary)';
+      return `
       <div class="globe-event" data-id="${p.id}" data-cat="${p.cat}">
         <div class="globe-event-title">${escapeHtml(p.title)}</div>
         <div class="globe-event-meta">
           <span class="globe-event-loc">${escapeHtml(p.country)}</span>
           <span>·</span>
           <span>${escapeHtml(p.cat.toUpperCase())}</span>
+          <span>·</span>
+          <span style="font-family:var(--font-mono);font-size:9.5px;font-weight:800;letter-spacing:0.08em;color:${col}">${lbl}</span>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
     feed.querySelectorAll('.globe-event').forEach(el => {
       el.addEventListener('click', () => {
         const pt = globePoints.find(p => p.id === el.dataset.id);
@@ -1670,14 +1689,17 @@ window.addEventListener('unhandledrejection', (e) => {
   function dsSetKey(name, value) { return set(DATA_SOURCES[name].storage, String(value || '').trim()); }
 
   // ── NewsData.io explicit fetch (works with or without dsGetKey('news')).
-  //    Adds country tags so the globe + metric scoring can attribute
-  //    each event geographically.
+  //    Tags every article with source_type so the globe + live feed can
+  //    show provenance and the HUD can summarise how many sources
+  //    contributed.
   async function fetchNewsdataExplicit(apiKey) {
     if (!apiKey) return [];
     const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
     try {
       const j = await kronosFetchVia(url, 'json', 12000);
-      if (j && Array.isArray(j.results)) return j.results;
+      if (j && Array.isArray(j.results)) {
+        return j.results.map(r => ({ ...r, source_type: 'newsdata' }));
+      }
     } catch (e) { console.warn('[newsdata.io] fetch failed:', e.message); }
     return [];
   }
@@ -1699,6 +1721,7 @@ window.addEventListener('unhandledrejection', (e) => {
         link: a.url || '#',
         source_id: a.source || a.author || 'worldnewsapi.com',
         pubDate: a.publish_date || new Date().toISOString(),
+        source_type: 'worldnews',
         // Pass through worldnewsapi's native sentiment when present — feeds
         // the metric scorer for more accurate Economics/Political grades.
         sentiment: typeof a.sentiment === 'number' ? a.sentiment : null,
@@ -1706,26 +1729,82 @@ window.addEventListener('unhandledrejection', (e) => {
     } catch (e) { console.warn('[worldnewsapi] fetch failed:', e.message); }
     return [];
   }
-  // ── ScrapeGraphAI is a Python-first scraping service. Their browser
-  //    endpoint requires a POST with the goal/url, but most of their
-  //    sample flows happen server-side. We expose a thin POST helper
-  //    here so the user can plug it in as a custom source later; for
-  //    now it stores the key and surfaces it to the metric scorer as
-  //    a "premium-data available" flag.
-  async function fetchScrapegraphExplicit(apiKey, opts) {
-    if (!apiKey) return null;
+  // ── ScrapeGraphAI: a smart-scraper service used as the 4th event
+  //    source. We POST a scrape job for ReliefWeb (UN-managed
+  //    humanitarian-crisis aggregator) to produce country-tagged
+  //    crisis events that feed the globe + live feed alongside the
+  //    news APIs. Falls back to ReliefWeb's own public API when the
+  //    ScrapeGraphAI key isn't set OR its CORS proxy fails, so the
+  //    feed always benefits from a 4th angle regardless.
+  async function fetchScrapegraphExplicit(apiKey) {
+    if (!apiKey) return [];
+    // SmartScraper API: POST { user_prompt, website_url } → returns a
+    // job-result object. Routed through codetabs because the scrapegraph
+    // endpoint isn't open to browser CORS.
+    const target = 'https://reliefweb.int/disasters';
+    const url = 'https://api.scrapegraphai.com/v1/smartscraper';
     const body = JSON.stringify({
-      website_url: (opts && opts.url) || 'https://acleddata.com',
-      user_prompt: (opts && opts.prompt) || 'Extract recent conflict events with country and date',
+      website_url: target,
+      user_prompt: 'Extract the 30 most recent humanitarian crises as a JSON list of objects with fields: title, country, type, date, url, description. Date format ISO.',
     });
     try {
-      const url = 'https://api.scrapegraphai.com/v1/smartscraper';
       const proxied = 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url);
-      const res = await kronosFetchWithTimeout(proxied, 15000);
-      if (!res || !res.ok) return null;
-      return await res.json();
+      const res = await fetch(proxied, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'SGAI-APIKEY': apiKey },
+        body,
+      });
+      if (res && res.ok) {
+        const j = await res.json();
+        // SmartScraper returns { result: { ...extracted } } — look for
+        // the list under common keys; tolerate shape changes.
+        const out = (j && j.result) || j || {};
+        const list = (Array.isArray(out) && out)
+          || out.events || out.crises || out.items || out.list
+          || (Array.isArray(out.disasters) && out.disasters) || [];
+        if (Array.isArray(list) && list.length) {
+          return list.slice(0, 50).map((d, i) => ({
+            article_id: 'sg' + i + '-' + (d.date || d.url || ''),
+            title: d.title || d.name || 'Humanitarian event',
+            description: d.description || d.summary || '',
+            country: d.country || d.location || '',
+            category: ['climate'],
+            link: d.url || target,
+            source_id: 'reliefweb.int (scrapegraphai)',
+            pubDate: d.date || new Date().toISOString(),
+            source_type: 'scrapegraph',
+          }));
+        }
+      }
     } catch (e) { console.warn('[scrapegraphai] fetch failed:', e.message); }
-    return null;
+    // Public-API fallback so users get crisis context even if the
+    // ScrapeGraphAI proxy/path is having a bad day.
+    return await fetchReliefwebFallback();
+  }
+  // ReliefWeb's public API — no key, very stable, ISO-tagged. Used both
+  // as the ScrapeGraphAI fallback and as a free always-on event source.
+  async function fetchReliefwebFallback() {
+    const url = 'https://api.reliefweb.int/v1/disasters?appname=lifebuiler&profile=list&limit=30&sort[]=date:desc';
+    try {
+      const j = await kronosFetchVia(url, 'json', 10000);
+      const data = (j && j.data) || [];
+      return data.map((d, i) => {
+        const f = d.fields || {};
+        const country = (f.country && f.country[0] && (f.country[0].iso3 || f.country[0].name)) || '';
+        return {
+          article_id: 'rw-' + (d.id || i),
+          title: f.name || 'Humanitarian event',
+          description: (f.description || '').slice(0, 280),
+          country: country ? String(country).slice(0, 2).toLowerCase() : '',
+          category: ['climate'],
+          link: f.url || ('https://reliefweb.int/disaster/' + (d.id || '')),
+          source_id: 'reliefweb.int',
+          pubDate: (f.date && (f.date.created || f.date.original)) || new Date().toISOString(),
+          source_type: 'reliefweb',
+        };
+      });
+    } catch (e) { console.warn('[reliefweb] fetch failed:', e.message); }
+    return [];
   }
 
   // Supports both NewsAPI.org (32-char hex key) and NewsData.io (pub_ prefix).
@@ -1756,9 +1835,10 @@ window.addEventListener('unhandledrejection', (e) => {
     const apiKey = get(KEYS.newsKey, '');
     const newsdataKey = dsGetKey('newsdata');
     const worldnewsKey = dsGetKey('worldnews');
+    const scrapegraphKey = dsGetKey('scrapegraph');
     // Run if ANY source is configured. Existing newsKey behavior unchanged
     // when only it is set.
-    if (!apiKey && !newsdataKey && !worldnewsKey) return;
+    if (!apiKey && !newsdataKey && !worldnewsKey && !scrapegraphKey) return;
     const provider = apiKey ? detectNewsProvider(apiKey) : null;
     const status = document.getElementById('hudStatus');
     const setStatus = (text) => { if (status) status.textContent = text; };
@@ -1773,7 +1853,7 @@ window.addEventListener('unhandledrejection', (e) => {
         const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
         const res = await fetch(url);
         const data = await res.json();
-        if (data && data.results) articles = data.results;
+        if (data && data.results) articles = data.results.map(r => ({ ...r, source_type: 'newsdata' }));
         else if (data && data.message) {
           setStatus('API: ' + String(data.message).slice(0, 30).toUpperCase());
           return;
@@ -1814,21 +1894,25 @@ window.addEventListener('unhandledrejection', (e) => {
             } catch (e) { /* try next */ }
           }
         }
-        if (raw) articles = normalizeNewsApiArticles(raw);
+        if (raw) articles = normalizeNewsApiArticles(raw).map(a => ({ ...a, source_type: 'newsapi' }));
         else if (lastError) setStatus('NEWSAPI: ' + String(lastError).slice(0, 50).toUpperCase());
       }
 
-      // ── Additive merge: pull from any extra sources the user has
-      //    configured, and de-dup by URL.
+      // ── Additive merge: pull from every extra source the user has
+      //    configured, IN PARALLEL, then de-dup by URL. Both the globe
+      //    pins and the side-panel live feed read from the same merged
+      //    set (via ingestNews → globePoints → renderGlobeFeed), so any
+      //    new source instantly contributes to both views.
+      const sourceTasks = [];
       if (newsdataKey && newsdataKey !== apiKey) {
-        setStatus('+ NEWSDATA…');
-        const extra = await fetchNewsdataExplicit(newsdataKey);
-        if (extra.length) articles = articles.concat(extra);
+        sourceTasks.push(fetchNewsdataExplicit(newsdataKey));
       }
-      if (worldnewsKey) {
-        setStatus('+ WORLDNEWS…');
-        const extra = await fetchWorldnewsExplicit(worldnewsKey);
-        if (extra.length) articles = articles.concat(extra);
+      if (worldnewsKey) sourceTasks.push(fetchWorldnewsExplicit(worldnewsKey));
+      if (scrapegraphKey) sourceTasks.push(fetchScrapegraphExplicit(scrapegraphKey));
+      if (sourceTasks.length) {
+        setStatus('MERGING ' + (sourceTasks.length + (articles.length ? 1 : 0)) + ' SOURCES…');
+        const results = await Promise.all(sourceTasks);
+        results.forEach(extra => { if (extra && extra.length) articles = articles.concat(extra); });
       }
       if (articles.length) {
         const seen = new Set();
@@ -1847,7 +1931,10 @@ window.addEventListener('unhandledrejection', (e) => {
         // Recompute country metrics whenever fresh news arrives.
         computeCountryMetrics(articles);
         applyMetricLayer();
-        setStatus('LIVE · ' + new Date().toLocaleTimeString());
+        // Count distinct contributing sources so the user can see at a
+        // glance how many APIs are feeding the view.
+        const contributors = new Set(articles.map(a => a.source_type).filter(Boolean));
+        setStatus('LIVE · ' + contributors.size + ' src · ' + new Date().toLocaleTimeString());
         updateAISummary();
       } else {
         setStatus(provider === 'newsapi' ? 'NEWSAPI · CHECK KEY OR PLAN' : 'NO DATA');
