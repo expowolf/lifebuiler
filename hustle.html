@@ -1684,6 +1684,45 @@
   }
   .hk-input:focus { border-color: var(--primary); }
 
+  /* Threat Board — conflict-severity ranking for the active metric */
+  .threat-board {
+    background: rgba(0,0,0,0.30); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px; margin-bottom: 12px;
+  }
+  .threat-board-h {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .threat-board-title {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--foreground);
+  }
+  .threat-board-level {
+    font-family: var(--font-mono); font-size: 9.5px; font-weight: 800;
+    letter-spacing: 0.10em; padding: 3px 9px; border-radius: 999px;
+  }
+  .threat-row {
+    display: grid; grid-template-columns: 18px 1fr auto; align-items: center;
+    gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+    cursor: pointer; transition: background 0.12s;
+  }
+  .threat-row:last-child { border-bottom: none; }
+  .threat-row:hover { background: rgba(255,255,255,0.04); }
+  .threat-rank {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 800;
+    color: var(--text-tertiary); text-align: center;
+  }
+  .threat-name { font-size: 12.5px; font-weight: 600; color: var(--foreground); }
+  .threat-meter {
+    display: flex; align-items: center; gap: 7px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  }
+  .threat-meter-bar {
+    width: 46px; height: 6px; border-radius: 999px;
+    background: rgba(255,255,255,0.08); overflow: hidden;
+  }
+  .threat-meter-fill { height: 100%; border-radius: 999px; }
+
   /* Respect reduced-motion preferences */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -1779,10 +1818,10 @@
           <span class="globe-hud-line">WORLD INTELLIGENCE</span>
           <span class="globe-hud-line">FEED · NEWSDATA.IO</span>
         </div>
-        <div class="globe-hud globe-hud-corner-tr">
+        <div class="globe-hud globe-hud-corner-tr" style="pointer-events:auto">
           <span class="globe-hud-line" id="hudCoord">LAT 0.00  LON 0.00</span>
           <span class="globe-hud-line" id="hudUtc">UTC —</span>
-          <span class="globe-hud-line" id="hudAllKeys" style="cursor:pointer;color:var(--accent-amber);margin-top:4px" title="Manage all API keys">⚙ ALL KEYS</span>
+          <span class="globe-hud-line" id="hudAllKeys" style="cursor:pointer;color:var(--accent-amber);margin-top:4px;pointer-events:auto" title="Manage all API keys">⚙ ALL KEYS</span>
         </div>
         <!-- Metric layer selector — borders + War/Economics/Social/Political -->
         <div class="globe-metric-bar" id="globeMetricBar">
@@ -1814,6 +1853,15 @@
         </div>
       </div>
       <aside class="globe-side">
+        <!-- Threat Board — ranked severity for the active metric layer.
+             Hidden in Events mode; shown when a War/Econ/Social/Pol layer is on. -->
+        <div class="threat-board" id="threatBoard" style="display:none">
+          <div class="threat-board-h">
+            <span class="threat-board-title" id="threatBoardTitle">⚔ Threat Board</span>
+            <span class="threat-board-level" id="threatBoardLevel">—</span>
+          </div>
+          <div class="threat-board-list" id="threatBoardList"></div>
+        </div>
         <div class="globe-side-h">
           <span class="globe-side-title">Live Feed</span>
           <span class="globe-side-count" id="globeSideCount">0</span>
