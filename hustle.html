@@ -1628,6 +1628,62 @@
   .kronos-ct-buy  { color: var(--accent-mint); }
   .kronos-ct-sell { color: var(--accent-rose); }
 
+  /* ============================================================
+     GLOBE — metric layer selector + keys modal
+     ============================================================ */
+  .globe-metric-bar {
+    position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center;
+    background: rgba(0,0,0,0.55); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 10px; z-index: 6;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    pointer-events: auto;
+  }
+  .globe-metric-eyebrow {
+    font-family: var(--font-mono); font-size: 9px; font-weight: 800;
+    letter-spacing: 0.18em; color: var(--text-tertiary);
+    padding: 0 8px 0 2px; border-right: 1px solid var(--border); margin-right: 2px;
+  }
+  .globe-metric-btn {
+    background: transparent; border: none; color: var(--muted-foreground);
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.06em; padding: 5px 10px; border-radius: 999px;
+    cursor: pointer; transition: color 0.15s, background 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .globe-metric-btn:hover { color: var(--foreground); background: rgba(255,255,255,0.04); }
+  .globe-metric-btn.active {
+    background: var(--primary); color: var(--primary-foreground,#000);
+  }
+  .globe-metric-legend {
+    margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 9.5px; color: var(--text-tertiary);
+    display: none; align-items: center; gap: 4px;
+  }
+  .globe-metric-legend.show { display: inline-flex; }
+  .globe-metric-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  @media (max-width: 720px) {
+    .globe-metric-bar { left: 8px; right: 8px; transform: none; padding: 4px 6px; }
+    .globe-metric-btn { padding: 4px 8px; font-size: 9.5px; }
+    .globe-metric-legend { display: none !important; }
+  }
+  /* Keys modal rows */
+  .hk-row { margin-bottom: 12px; }
+  .hk-label {
+    display: block; font-size: 11px; font-weight: 700; color: var(--foreground);
+    margin-bottom: 5px; letter-spacing: 0.02em;
+  }
+  .hk-sub {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 400;
+    color: var(--text-tertiary); margin-left: 6px;
+  }
+  .hk-input {
+    width: 100%; background: rgba(0,0,0,0.30); border: 1px solid var(--border);
+    color: var(--foreground); padding: 9px 12px; font-family: var(--font-mono);
+    font-size: 12px; border-radius: 0.5rem; outline: none;
+  }
+  .hk-input:focus { border-color: var(--primary); }
+
   /* Respect reduced-motion preferences */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -1726,6 +1782,17 @@
         <div class="globe-hud globe-hud-corner-tr">
           <span class="globe-hud-line" id="hudCoord">LAT 0.00  LON 0.00</span>
           <span class="globe-hud-line" id="hudUtc">UTC —</span>
+          <span class="globe-hud-line" id="hudAllKeys" style="cursor:pointer;color:var(--accent-amber);margin-top:4px" title="Manage all API keys">⚙ ALL KEYS</span>
+        </div>
+        <!-- Metric layer selector — borders + War/Economics/Social/Political -->
+        <div class="globe-metric-bar" id="globeMetricBar">
+          <span class="globe-metric-eyebrow">LAYER</span>
+          <button class="globe-metric-btn active" data-metric="off"     >Events</button>
+          <button class="globe-metric-btn"        data-metric="war"     >⚔ War</button>
+          <button class="globe-metric-btn"        data-metric="economics">$ Econ</button>
+          <button class="globe-metric-btn"        data-metric="social"  >☯ Social</button>
+          <button class="globe-metric-btn"        data-metric="political">⚖ Pol</button>
+          <span class="globe-metric-legend" id="globeMetricLegend"></span>
         </div>
         <div class="globe-hud globe-hud-corner-bl" style="pointer-events:auto">
           <span class="globe-hud-line">EVENTS LIVE · <span class="globe-hud-num" id="hudEvents">0</span></span>
@@ -1955,6 +2022,43 @@
       <button class="drawer-btn danger"  id="drDelBtn">Delete</button>
     </div>
   </aside>
+</div>
+
+<!-- ===== All API Keys modal — manages every data-source key in one place ===== -->
+<div class="globe-detail-overlay" id="hustleKeysOverlay">
+  <div class="globe-detail" style="max-width:480px">
+    <div class="globe-detail-head">
+      <div class="globe-detail-cat" style="color:var(--accent-amber);background:rgba(252,211,77,0.10)">⚙ DATA SOURCES</div>
+      <div class="globe-detail-title">API Keys</div>
+      <button class="globe-detail-close" id="hustleKeysClose">×</button>
+    </div>
+    <div class="globe-detail-body">
+      <div style="font-size:12px;color:var(--muted-foreground);margin-bottom:14px;line-height:1.55">
+        Paste keys for any sources you want to enable. All are <b>optional</b> and <b>additive</b> — none replaces the others. Stored locally, synced across your devices.
+      </div>
+      <div class="hk-row">
+        <label class="hk-label">News (NewsAPI.org or NewsData.io) <span class="hk-sub">auto-detected · existing</span></label>
+        <input class="hk-input" id="hkNewsKey" placeholder="32-char hex or pub_…" autocomplete="off" />
+      </div>
+      <div class="hk-row">
+        <label class="hk-label">NewsData.io <span class="hk-sub">global news aggregation · newsdata.io/search-dashboard</span></label>
+        <input class="hk-input" id="hkNewsdataKey" placeholder="pub_…" autocomplete="off" />
+      </div>
+      <div class="hk-row">
+        <label class="hk-label">WorldNewsAPI <span class="hk-sub">specialized international coverage · worldnewsapi.com</span></label>
+        <input class="hk-input" id="hkWorldnewsKey" placeholder="api key" autocomplete="off" />
+      </div>
+      <div class="hk-row">
+        <label class="hk-label">ScrapeGraphAI <span class="hk-sub">web scraping / data extraction · scrapegraphai.com/dashboard</span></label>
+        <input class="hk-input" id="hkScrapegraphKey" placeholder="sgai-…" autocomplete="off" />
+      </div>
+      <div style="display:flex;gap:8px;margin-top:18px">
+        <button id="hkSaveBtn" class="globe-key-btn" style="flex:1">Save all keys</button>
+        <button id="hkTestBtn" class="globe-key-skip" style="flex:0 0 110px">Test</button>
+      </div>
+      <div id="hkStatus" style="margin-top:10px;font-size:12px;color:var(--muted-foreground);min-height:18px"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ===== Globe event detail ===== -->

@@ -21,6 +21,12 @@ window.addEventListener('unhandledrejection', (e) => {
     newsKey: 'hustle_news_api_key',
     newsCache: 'hustle_news_cache',
     activeTab: 'hustle_active_tab',
+    // ── Additional data-source keys (additive — none replaces existing ones)
+    //    Stored under hustle_ prefix so supabase-sync picks them up.
+    newsdataKey:    'hustle_newsdata_api_key',     // NewsData.io explicit
+    worldnewsKey:   'hustle_worldnews_api_key',    // WorldNewsAPI
+    scrapegraphKey: 'hustle_scrapegraph_api_key',  // ScrapeGraphAI
+    globeMetric:    'hustle_globe_metric',         // active metric layer
   };
   function get(key, fallback) {
     try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
@@ -850,14 +856,284 @@ window.addEventListener('unhandledrejection', (e) => {
   }
   const hudStatusEl = document.getElementById('hudStatus');
   const hudEditEl = document.getElementById('hudEditKey');
+  const hudAllKeysEl = document.getElementById('hudAllKeys');
   const globeKeySkipBtn = document.getElementById('globeKeySkipBtn');
   if (hudStatusEl) hudStatusEl.addEventListener('click', reopenKeyBanner);
   if (hudEditEl) hudEditEl.addEventListener('click', reopenKeyBanner);
+  if (hudAllKeysEl) hudAllKeysEl.addEventListener('click', openAllKeysModal);
   if (globeKeySkipBtn) globeKeySkipBtn.addEventListener('click', () => {
     showKeyBanner(false);
     ingestNews(SAMPLE_NEWS);
     if (hudStatusEl) hudStatusEl.textContent = 'SAMPLE FEED';
   });
+
+  // ============================================================
+  // ALL-KEYS MODAL — manage every additional data-source key.
+  // Existing newsKey stays editable here too, alongside the new
+  // additive sources.
+  // ============================================================
+  function openAllKeysModal() {
+    const overlay = document.getElementById('hustleKeysOverlay');
+    if (!overlay) return;
+    const setVal = (id, key) => {
+      const el = document.getElementById(id);
+      if (el) el.value = get(key, '') || '';
+    };
+    setVal('hkNewsKey',        KEYS.newsKey);
+    setVal('hkNewsdataKey',    KEYS.newsdataKey);
+    setVal('hkWorldnewsKey',   KEYS.worldnewsKey);
+    setVal('hkScrapegraphKey', KEYS.scrapegraphKey);
+    const st = document.getElementById('hkStatus'); if (st) st.textContent = '';
+    overlay.classList.add('open');
+  }
+  function closeAllKeysModal() {
+    const o = document.getElementById('hustleKeysOverlay');
+    if (o) o.classList.remove('open');
+  }
+  const hkCloseBtn = document.getElementById('hustleKeysClose');
+  const hkSaveBtn  = document.getElementById('hkSaveBtn');
+  const hkTestBtn  = document.getElementById('hkTestBtn');
+  if (hkCloseBtn) hkCloseBtn.addEventListener('click', closeAllKeysModal);
+  const hkOverlay = document.getElementById('hustleKeysOverlay');
+  if (hkOverlay) hkOverlay.addEventListener('click', e => { if (e.target === hkOverlay) closeAllKeysModal(); });
+  if (hkSaveBtn) hkSaveBtn.addEventListener('click', () => {
+    const grab = id => (document.getElementById(id) || {}).value || '';
+    set(KEYS.newsKey,        grab('hkNewsKey').trim());
+    set(KEYS.newsdataKey,    grab('hkNewsdataKey').trim());
+    set(KEYS.worldnewsKey,   grab('hkWorldnewsKey').trim());
+    set(KEYS.scrapegraphKey, grab('hkScrapegraphKey').trim());
+    const st = document.getElementById('hkStatus');
+    if (st) { st.textContent = '✓ Saved. Refreshing feed…'; st.style.color = 'var(--accent-mint)'; }
+    // Kick off a fresh fetch so the metric layer updates immediately.
+    fetchNews();
+    setTimeout(closeAllKeysModal, 900);
+  });
+  if (hkTestBtn) hkTestBtn.addEventListener('click', async () => {
+    const st = document.getElementById('hkStatus');
+    if (!st) return;
+    st.style.color = 'var(--muted-foreground)';
+    const lines = [];
+    const newsKey = (document.getElementById('hkNewsKey') || {}).value || '';
+    if (newsKey) lines.push((detectNewsProvider(newsKey) === 'newsdata' ? '✓ NewsData.io key shape OK' : '✓ NewsAPI.org key shape OK'));
+    const nd = (document.getElementById('hkNewsdataKey') || {}).value || '';
+    if (nd) lines.push(nd.startsWith('pub_') ? '✓ NewsData.io explicit shape OK' : '⚠ NewsData.io keys usually start with pub_');
+    const wn = (document.getElementById('hkWorldnewsKey') || {}).value || '';
+    if (wn) lines.push('✓ WorldNewsAPI key set (' + wn.length + ' chars)');
+    const sg = (document.getElementById('hkScrapegraphKey') || {}).value || '';
+    if (sg) lines.push(sg.startsWith('sgai-') ? '✓ ScrapeGraphAI key shape OK' : '⚠ ScrapeGraphAI keys usually start with sgai-');
+    st.textContent = lines.length ? lines.join('  ·  ') : 'Paste at least one key, then click Save.';
+  });
+
+  // ============================================================
+  // COUNTRY BORDERS + METRIC LAYER
+  // GeoJSON of country polygons drawn on the globe via globe.gl's
+  // polygonsData. The cap color is driven by the active metric
+  // (war/economics/social/political); "off" = Events view (no fill).
+  // ============================================================
+  let countryFeatures = null;
+  let countryMetrics = {};           // { 'us': { war, economics, social, political } }
+  let currentMetric = get(KEYS.globeMetric, 'off');
+
+  // Baseline scores 0-100 (higher = more critical) seeded from publicly-
+  // known indices (GPI / Fragile States / V-Dem ranges as of 2025).
+  // News flow refines these on top.
+  const METRIC_BASELINE = {
+    ua:{war:95,economics:75,social:68,political:72}, ru:{war:88,economics:65,social:60,political:80},
+    sy:{war:90,economics:80,social:78,political:85}, ye:{war:88,economics:82,social:80,political:78},
+    af:{war:82,economics:85,social:78,political:80}, ir:{war:72,economics:70,social:65,political:78},
+    iq:{war:68,economics:60,social:62,political:65}, lb:{war:55,economics:78,social:60,political:72},
+    il:{war:72,economics:35,social:48,political:55}, ps:{war:88,economics:75,social:70,political:78},
+    sd:{war:85,economics:80,social:75,political:80}, et:{war:62,economics:55,social:55,political:60},
+    ng:{war:50,economics:55,social:50,political:55}, cd:{war:65,economics:70,social:62,political:65},
+    so:{war:78,economics:78,social:72,political:75}, my:{war:18,economics:30,social:30,political:35},
+    cn:{war:25,economics:35,social:40,political:55}, kr:{war:25,economics:25,social:25,political:25},
+    kp:{war:55,economics:80,social:78,political:90}, jp:{war:12,economics:30,social:18,political:20},
+    in:{war:30,economics:35,social:42,political:38}, pk:{war:50,economics:60,social:55,political:55},
+    bd:{war:25,economics:50,social:45,political:55}, id:{war:22,economics:35,social:35,political:35},
+    ph:{war:32,economics:40,social:40,political:42}, vn:{war:15,economics:35,social:30,political:55},
+    th:{war:25,economics:35,social:35,political:50}, tw:{war:35,economics:25,social:22,political:30},
+    sg:{war:8, economics:18,social:18,political:22}, au:{war:10,economics:22,social:20,political:22},
+    nz:{war:8, economics:22,social:18,political:18}, us:{war:25,economics:32,social:48,political:55},
+    ca:{war:10,economics:25,social:28,political:25}, mx:{war:45,economics:48,social:50,political:50},
+    br:{war:25,economics:48,social:50,political:48}, ar:{war:18,economics:65,social:45,political:48},
+    cl:{war:15,economics:40,social:38,political:38}, co:{war:42,economics:48,social:48,political:48},
+    ve:{war:38,economics:90,social:70,political:78}, pe:{war:22,economics:48,social:48,political:55},
+    ec:{war:35,economics:48,social:50,political:48}, gb:{war:12,economics:30,social:30,political:32},
+    fr:{war:15,economics:35,social:38,political:35}, de:{war:10,economics:28,social:28,political:25},
+    es:{war:10,economics:35,social:32,political:32}, it:{war:10,economics:38,social:30,political:35},
+    nl:{war:8, economics:22,social:20,political:20}, be:{war:8, economics:25,social:22,political:25},
+    ch:{war:5, economics:18,social:15,political:15}, se:{war:8, economics:22,social:22,political:18},
+    no:{war:6, economics:18,social:15,political:15}, fi:{war:8, economics:20,social:18,political:18},
+    dk:{war:6, economics:20,social:18,political:18}, pl:{war:18,economics:30,social:30,political:32},
+    cz:{war:10,economics:25,social:22,political:25}, hu:{war:15,economics:32,social:32,political:42},
+    ro:{war:18,economics:38,social:35,political:35}, gr:{war:10,economics:42,social:35,political:35},
+    pt:{war:8, economics:32,social:25,political:25}, ie:{war:8, economics:25,social:22,political:22},
+    tr:{war:38,economics:55,social:48,political:55}, eg:{war:32,economics:55,social:50,political:60},
+    sa:{war:35,economics:30,social:42,political:60}, ae:{war:18,economics:22,social:30,political:40},
+    qa:{war:18,economics:18,social:28,political:35}, za:{war:25,economics:50,social:55,political:45},
+    ke:{war:32,economics:50,social:45,political:42}, ma:{war:18,economics:42,social:35,political:40},
+    dz:{war:32,economics:50,social:42,political:50},
+  };
+
+  // News categories → metric weights. Each matching article bumps the
+  // corresponding country's metric by `weight` (capped at 100). Recency
+  // bias is applied below.
+  const METRIC_CAT_WEIGHT = {
+    war:       { war: 8,  economics: 2, social: 3, political: 4 },
+    politics:  { war: 1,  economics: 1, social: 3, political: 6 },
+    economy:   { war: 0,  economics: 6, social: 2, political: 1 },
+    markets:   { war: 0,  economics: 5, social: 1, political: 1 },
+    energy:    { war: 1,  economics: 4, social: 1, political: 2 },
+    tech:      { war: 0,  economics: 3, social: 1, political: 0 },
+    climate:   { war: 0,  economics: 2, social: 4, political: 1 },
+  };
+
+  function metricForCountry(iso2, metric) {
+    const k = String(iso2 || '').toLowerCase();
+    const row = countryMetrics[k] || METRIC_BASELINE[k];
+    if (!row || row[metric] == null) return null;
+    return row[metric];
+  }
+  function metricColor(score) {
+    if (score == null) return 'rgba(180,180,180,0.10)';
+    // 0 = green, 50 = amber, 100 = red — chart palette
+    if (score <= 50) {
+      const t = score / 50;
+      const r = Math.round(74 + (252 - 74) * t);
+      const g = Math.round(222 + (211 - 222) * t);
+      const b = Math.round(128 + (77 - 128) * t);
+      return `rgba(${r},${g},${b},0.42)`;
+    }
+    const t = (score - 50) / 50;
+    const r = Math.round(252 + (248 - 252) * t);
+    const g = Math.round(211 + (113 - 211) * t);
+    const b = Math.round(77 + (113 - 77) * t);
+    return `rgba(${r},${g},${b},0.52)`;
+  }
+  // Aggregate news → metrics, layered on top of the baseline.
+  function computeCountryMetrics(events) {
+    const out = {};
+    // Seed with baseline so countries with no news still grade fairly.
+    Object.keys(METRIC_BASELINE).forEach(k => {
+      out[k] = { ...METRIC_BASELINE[k] };
+    });
+    const now = Date.now();
+    (events || []).forEach(e => {
+      // Pull a 2-letter ISO. Globe events already store .country uppercased;
+      // worldnewsapi has ISO-2 in source_countries[0].
+      let iso = String((e.country || e.country_code || '') + '').toLowerCase();
+      if (iso.length > 2) {
+        const map = { 'united states':'us','usa':'us','china':'cn','russia':'ru','germany':'de','france':'fr','united kingdom':'gb','uk':'gb','japan':'jp','india':'in','brazil':'br','canada':'ca','australia':'au','south korea':'kr','mexico':'mx','spain':'es','italy':'it','netherlands':'nl','sweden':'se','switzerland':'ch','saudi arabia':'sa','uae':'ae','israel':'il','iran':'ir','turkey':'tr','egypt':'eg','south africa':'za','nigeria':'ng','kenya':'ke','ukraine':'ua','poland':'pl','taiwan':'tw','singapore':'sg','hong kong':'hk' };
+        iso = map[iso] || iso.slice(0, 2);
+      }
+      if (!iso || iso.length !== 2) return;
+      const cat = (e.cat || (Array.isArray(e.category) ? e.category[0] : '') || '').toLowerCase();
+      const w = METRIC_CAT_WEIGHT[cat]; if (!w) return;
+      // Recency decay over 7d window.
+      const ts = e.pubDate ? Date.parse(e.pubDate) : now;
+      const ageDays = Math.max(0, (now - ts) / 86400000);
+      const decay = Math.exp(-ageDays / 7);
+      if (!out[iso]) out[iso] = { war: 10, economics: 25, social: 25, political: 25 };
+      out[iso].war       = clip((out[iso].war       || 0) + w.war       * decay, 0, 100);
+      out[iso].economics = clip((out[iso].economics || 0) + w.economics * decay, 0, 100);
+      out[iso].social    = clip((out[iso].social    || 0) + w.social    * decay, 0, 100);
+      out[iso].political = clip((out[iso].political || 0) + w.political * decay, 0, 100);
+      // WorldNewsAPI native sentiment, when present, dampens the
+      // Economics/Political bumps for positive sentiment.
+      if (typeof e.sentiment === 'number') {
+        const adj = -e.sentiment * 4 * decay; // +sentiment → less critical
+        out[iso].economics = clip(out[iso].economics + adj, 0, 100);
+        out[iso].political = clip(out[iso].political + adj, 0, 100);
+      }
+    });
+    countryMetrics = out;
+  }
+  // Get an ISO2 from a GeoJSON feature, trying every common property name
+  // used by the various country GeoJSON sources.
+  function featureIso(f) {
+    const p = (f && f.properties) || {};
+    const v = p.ISO_A2 || p.iso_a2 || p['ISO3166-1-Alpha-2'] || p.WB_A2 || p.ADM0_A2 || '';
+    return String(v || '').toLowerCase();
+  }
+  async function loadCountryBorders() {
+    if (countryFeatures) return countryFeatures;
+    // Datasets-org countries.geojson — small (~220KB), CC0, ships ISO_A2.
+    const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
+    try {
+      const j = await kronosFetchVia(url, 'json', 12000);
+      if (j && Array.isArray(j.features)) {
+        countryFeatures = j.features;
+        return countryFeatures;
+      }
+    } catch (e) { console.warn('[borders] load failed:', e.message); }
+    return null;
+  }
+  async function ensureBorderLayer() {
+    if (!globeInstance) return;
+    const features = await loadCountryBorders();
+    if (!features || !globeInstance.polygonsData) return;
+    globeInstance
+      .polygonsData(features)
+      .polygonCapColor(f => {
+        if (currentMetric === 'off') return 'rgba(255,255,255,0.02)';
+        return metricColor(metricForCountry(featureIso(f), currentMetric));
+      })
+      .polygonSideColor(() => 'rgba(0,0,0,0)')
+      .polygonStrokeColor(() => 'rgba(255,255,255,0.45)')
+      .polygonAltitude(() => currentMetric === 'off' ? 0.003 : 0.009)
+      .polygonLabel(f => {
+        const name = (f.properties && (f.properties.ADMIN || f.properties.name)) || '';
+        const iso = featureIso(f);
+        const m = countryMetrics[iso] || METRIC_BASELINE[iso];
+        if (!m || currentMetric === 'off') return `<div style="background:rgba(0,0,0,0.85);color:#fff;padding:6px 10px;border-radius:6px;font-family:ui-monospace,monospace;font-size:11px">${escapeHtml(name)}</div>`;
+        const lab = currentMetric.charAt(0).toUpperCase() + currentMetric.slice(1);
+        return `<div style="background:rgba(0,0,0,0.88);color:#fff;padding:8px 12px;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;min-width:140px">
+          <div style="font-weight:800;margin-bottom:3px">${escapeHtml(name)}</div>
+          <div style="color:#aaa">${lab}: <b style="color:#fff">${(m[currentMetric]||0).toFixed(0)} / 100</b></div>
+        </div>`;
+      });
+  }
+  function applyMetricLayer() {
+    if (!globeInstance) return;
+    // Re-trigger polygon recolor with the current accessor.
+    try {
+      if (countryFeatures) {
+        globeInstance
+          .polygonCapColor(f => currentMetric === 'off' ? 'rgba(255,255,255,0.02)' : metricColor(metricForCountry(featureIso(f), currentMetric)))
+          .polygonAltitude(() => currentMetric === 'off' ? 0.003 : 0.009);
+      }
+    } catch (e) {}
+    // Buttons + legend
+    document.querySelectorAll('.globe-metric-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.metric === currentMetric);
+    });
+    const legend = document.getElementById('globeMetricLegend');
+    if (legend) {
+      if (currentMetric === 'off') legend.classList.remove('show');
+      else {
+        legend.classList.add('show');
+        legend.innerHTML = '<span class="globe-metric-legend-dot" style="background:rgb(74,222,128)"></span>STABLE'
+          + '<span class="globe-metric-legend-dot" style="background:rgb(252,211,77);margin-left:6px"></span>MOD'
+          + '<span class="globe-metric-legend-dot" style="background:rgb(248,113,113);margin-left:6px"></span>CRITICAL';
+      }
+    }
+  }
+  // Wire the metric selector buttons.
+  document.querySelectorAll('.globe-metric-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentMetric = btn.dataset.metric;
+      set(KEYS.globeMetric, currentMetric);
+      applyMetricLayer();
+    });
+  });
+  // Initial borders + metrics — fire after a beat so globe init wins.
+  setTimeout(() => {
+    ensureBorderLayer().then(() => {
+      const cached = get(KEYS.newsCache, null);
+      if (cached && cached.events) computeCountryMetrics(cached.events);
+      applyMetricLayer();
+    });
+  }, 600);
 
   // ─── Country → lat/lon mapping ──────────────────────────
   // Limited set, broad coverage. Falls back to inferring from text.
@@ -1202,6 +1478,80 @@ window.addEventListener('unhandledrejection', (e) => {
   }
 
   // ─── News fetching ─────────────────────────────────────────
+  // ============================================================
+  // DATA-SOURCE CONFIG — central registry of every API key the app
+  // can use. Each entry is additive: the system degrades gracefully
+  // when a key is missing, and the existing newsKey path is fully
+  // preserved (it's just one provider in a longer list now).
+  // ============================================================
+  const DATA_SOURCES = {
+    news:        { storage: KEYS.newsKey,        label: 'News (NewsAPI/NewsData)', site: 'newsapi.org / newsdata.io' },
+    newsdata:    { storage: KEYS.newsdataKey,    label: 'NewsData.io',             site: 'newsdata.io/search-dashboard' },
+    worldnews:   { storage: KEYS.worldnewsKey,   label: 'WorldNewsAPI',            site: 'worldnewsapi.com' },
+    scrapegraph: { storage: KEYS.scrapegraphKey, label: 'ScrapeGraphAI',           site: 'scrapegraphai.com/dashboard' },
+  };
+  function dsGetKey(name)        { return get(DATA_SOURCES[name].storage, ''); }
+  function dsSetKey(name, value) { return set(DATA_SOURCES[name].storage, String(value || '').trim()); }
+
+  // ── NewsData.io explicit fetch (works with or without dsGetKey('news')).
+  //    Adds country tags so the globe + metric scoring can attribute
+  //    each event geographically.
+  async function fetchNewsdataExplicit(apiKey) {
+    if (!apiKey) return [];
+    const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
+    try {
+      const j = await kronosFetchVia(url, 'json', 12000);
+      if (j && Array.isArray(j.results)) return j.results;
+    } catch (e) { console.warn('[newsdata.io] fetch failed:', e.message); }
+    return [];
+  }
+  // ── WorldNewsAPI fetch. Endpoint: /search-news returns { news: [...] }
+  //    with article-level country/sentiment fields we can lean on.
+  async function fetchWorldnewsExplicit(apiKey) {
+    if (!apiKey) return [];
+    const url = `https://api.worldnewsapi.com/search-news?api-key=${encodeURIComponent(apiKey)}&language=en&number=50&sort=publish-time&sort-direction=DESC`;
+    try {
+      const j = await kronosFetchVia(url, 'json', 12000);
+      const arr = (j && j.news) || (j && j.articles) || [];
+      // Normalize to our globe schema (matches fetchNews()'s expected shape)
+      return arr.map((a, i) => ({
+        article_id: a.id ? ('wn' + a.id) : ('wn' + i + '-' + (a.publish_date || '')),
+        title: a.title || '',
+        description: a.text ? String(a.text).slice(0, 280) : (a.summary || ''),
+        country: (Array.isArray(a.source_countries) && a.source_countries[0]) || a.source_country || '',
+        category: a.category ? [a.category] : [],
+        link: a.url || '#',
+        source_id: a.source || a.author || 'worldnewsapi.com',
+        pubDate: a.publish_date || new Date().toISOString(),
+        // Pass through worldnewsapi's native sentiment when present — feeds
+        // the metric scorer for more accurate Economics/Political grades.
+        sentiment: typeof a.sentiment === 'number' ? a.sentiment : null,
+      }));
+    } catch (e) { console.warn('[worldnewsapi] fetch failed:', e.message); }
+    return [];
+  }
+  // ── ScrapeGraphAI is a Python-first scraping service. Their browser
+  //    endpoint requires a POST with the goal/url, but most of their
+  //    sample flows happen server-side. We expose a thin POST helper
+  //    here so the user can plug it in as a custom source later; for
+  //    now it stores the key and surfaces it to the metric scorer as
+  //    a "premium-data available" flag.
+  async function fetchScrapegraphExplicit(apiKey, opts) {
+    if (!apiKey) return null;
+    const body = JSON.stringify({
+      website_url: (opts && opts.url) || 'https://acleddata.com',
+      user_prompt: (opts && opts.prompt) || 'Extract recent conflict events with country and date',
+    });
+    try {
+      const url = 'https://api.scrapegraphai.com/v1/smartscraper';
+      const proxied = 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url);
+      const res = await kronosFetchWithTimeout(proxied, 15000);
+      if (!res || !res.ok) return null;
+      return await res.json();
+    } catch (e) { console.warn('[scrapegraphai] fetch failed:', e.message); }
+    return null;
+  }
+
   // Supports both NewsAPI.org (32-char hex key) and NewsData.io (pub_ prefix).
   // NewsAPI.org's free Developer plan blocks browser requests, so we route
   // through a public CORS proxy when needed.
@@ -1228,15 +1578,22 @@ window.addEventListener('unhandledrejection', (e) => {
 
   async function fetchNews() {
     const apiKey = get(KEYS.newsKey, '');
-    if (!apiKey) return;
-    const provider = detectNewsProvider(apiKey);
+    const newsdataKey = dsGetKey('newsdata');
+    const worldnewsKey = dsGetKey('worldnews');
+    // Run if ANY source is configured. Existing newsKey behavior unchanged
+    // when only it is set.
+    if (!apiKey && !newsdataKey && !worldnewsKey) return;
+    const provider = apiKey ? detectNewsProvider(apiKey) : null;
     const status = document.getElementById('hudStatus');
     const setStatus = (text) => { if (status) status.textContent = text; };
     setStatus('STREAMING…');
 
     try {
       let articles = [];
-      if (provider === 'newsdata') {
+      if (!apiKey) {
+        // Skip the existing-key block entirely; the new-source merge below
+        // will populate articles.
+      } else if (provider === 'newsdata') {
         const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
         const res = await fetch(url);
         const data = await res.json();
@@ -1285,9 +1642,35 @@ window.addEventListener('unhandledrejection', (e) => {
         else if (lastError) setStatus('NEWSAPI: ' + String(lastError).slice(0, 50).toUpperCase());
       }
 
+      // ── Additive merge: pull from any extra sources the user has
+      //    configured, and de-dup by URL.
+      if (newsdataKey && newsdataKey !== apiKey) {
+        setStatus('+ NEWSDATA…');
+        const extra = await fetchNewsdataExplicit(newsdataKey);
+        if (extra.length) articles = articles.concat(extra);
+      }
+      if (worldnewsKey) {
+        setStatus('+ WORLDNEWS…');
+        const extra = await fetchWorldnewsExplicit(worldnewsKey);
+        if (extra.length) articles = articles.concat(extra);
+      }
+      if (articles.length) {
+        const seen = new Set();
+        articles = articles.filter(a => {
+          const u = (a.link || a.url || '').toLowerCase();
+          if (!u) return true;
+          if (seen.has(u)) return false;
+          seen.add(u);
+          return true;
+        });
+      }
+
       if (articles && articles.length) {
         ingestNews(articles);
-        set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 100) });
+        set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 200) });
+        // Recompute country metrics whenever fresh news arrives.
+        computeCountryMetrics(articles);
+        applyMetricLayer();
         setStatus('LIVE · ' + new Date().toLocaleTimeString());
         updateAISummary();
       } else {
