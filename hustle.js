@@ -116,7 +116,8 @@ window.addEventListener('unhandledrejection', (e) => {
       if (globeInstance && globeInstance.controls) globeInstance.controls().autoRotate = false;
     } else {
       if (!tickerTimer) tickerTimer = setInterval(renderTicker, 4000);
-      if (globeInstance && globeInstance.controls) globeInstance.controls().autoRotate = true;
+      // Don't auto-spin on tab focus — keeps the polygon layer from
+      // forcing a constant redraw and tanking framerate.
     }
   });
 
@@ -776,10 +777,12 @@ window.addEventListener('unhandledrejection', (e) => {
         .ringRepeatPeriod(1400)
         (stage);
 
-      // Cinematic settings
+      // Cinematic settings. autoRotate defaults OFF — it forces a redraw
+      // every frame which made the polygon layer chug. User can still
+      // drag/spin the globe; we just don't auto-spin.
       try {
-        globeInstance.controls().autoRotate = true;
-        globeInstance.controls().autoRotateSpeed = 0.35;
+        globeInstance.controls().autoRotate = false;
+        globeInstance.controls().autoRotateSpeed = 0.25;
         globeInstance.controls().enableDamping = true;
         globeInstance.controls().dampingFactor = 0.08;
         globeInstance.controls().enableZoom = true;
@@ -867,10 +870,13 @@ window.addEventListener('unhandledrejection', (e) => {
   const hudStatusEl = document.getElementById('hudStatus');
   const hudEditEl = document.getElementById('hudEditKey');
   const hudAllKeysEl = document.getElementById('hudAllKeys');
+  const manageKeysBtnEl = document.getElementById('manageKeysBtn');
   const globeKeySkipBtn = document.getElementById('globeKeySkipBtn');
   if (hudStatusEl) hudStatusEl.addEventListener('click', reopenKeyBanner);
   if (hudEditEl) hudEditEl.addEventListener('click', reopenKeyBanner);
   if (hudAllKeysEl) hudAllKeysEl.addEventListener('click', openAllKeysModal);
+  // New: dedicated button below the globe that can't be eaten by the canvas
+  if (manageKeysBtnEl) manageKeysBtnEl.addEventListener('click', openAllKeysModal);
   if (globeKeySkipBtn) globeKeySkipBtn.addEventListener('click', () => {
     showKeyBanner(false);
     ingestNews(SAMPLE_NEWS);
@@ -941,8 +947,30 @@ window.addEventListener('unhandledrejection', (e) => {
   // (war/economics/social/political); "off" = Events view (no fill).
   // ============================================================
   let countryFeatures = null;
-  let countryMetrics = {};           // { 'us': { war, economics, social, political } }
-  let currentMetric = get(KEYS.globeMetric, 'off');
+  let countryMetrics = {};           // { 'us': { war, economics, social, political, composite } }
+  // Default headline view is the combined rating (one score per country).
+  // Migrate the legacy 'off' value seamlessly.
+  let currentMetric = get(KEYS.globeMetric, 'composite');
+  if (currentMetric === 'off') currentMetric = 'composite';
+  // PERF: cache colors keyed by iso+metric+score so the polygonCapColor
+  // callback is O(1) instead of recomputing rgb() per redraw. This is
+  // the single biggest source of lag with 250 polygons + autoRotate.
+  let polyColorCache = new Map();
+  function invalidatePolyColorCache() { polyColorCache = new Map(); }
+  // Composite = weighted blend of all four metrics, so users get ONE
+  // headline rating per country (the user's ask) with the sub-metrics
+  // still available for drill-down.
+  const COMPOSITE_WEIGHTS = { war: 0.35, economics: 0.25, social: 0.15, political: 0.25 };
+  function compositeOf(m) {
+    if (!m) return null;
+    let s = 0, w = 0;
+    for (const k in COMPOSITE_WEIGHTS) {
+      if (m[k] == null) continue;
+      s += m[k] * COMPOSITE_WEIGHTS[k];
+      w += COMPOSITE_WEIGHTS[k];
+    }
+    return w > 0 ? s / w : null;
+  }
 
   // Baseline scores 0-100 (higher = more critical) seeded from publicly-
   // known indices (GPI / Fragile States / V-Dem ranges as of 2025).
@@ -1001,24 +1029,26 @@ window.addEventListener('unhandledrejection', (e) => {
   function metricForCountry(iso2, metric) {
     const k = String(iso2 || '').toLowerCase();
     const row = countryMetrics[k] || METRIC_BASELINE[k];
-    if (!row || row[metric] == null) return null;
-    return row[metric];
+    if (!row) return null;
+    if (metric === 'composite') return compositeOf(row);
+    return row[metric] != null ? row[metric] : null;
   }
   function metricColor(score) {
-    if (score == null) return 'rgba(180,180,180,0.10)';
-    // 0 = green, 50 = amber, 100 = red — chart palette
+    if (score == null) return 'rgba(180,180,180,0.08)';
+    // 0 = green, 50 = amber, 100 = red — slightly translucent so the
+    // event pins always read clearly on top of the fill.
     if (score <= 50) {
       const t = score / 50;
       const r = Math.round(74 + (252 - 74) * t);
       const g = Math.round(222 + (211 - 222) * t);
       const b = Math.round(128 + (77 - 128) * t);
-      return `rgba(${r},${g},${b},0.42)`;
+      return `rgba(${r},${g},${b},0.32)`;
     }
     const t = (score - 50) / 50;
     const r = Math.round(252 + (248 - 252) * t);
     const g = Math.round(211 + (113 - 211) * t);
     const b = Math.round(77 + (113 - 77) * t);
-    return `rgba(${r},${g},${b},0.52)`;
+    return `rgba(${r},${g},${b},0.40)`;
   }
   // Aggregate news → metrics, layered on top of the baseline.
   function computeCountryMetrics(events) {
@@ -1056,7 +1086,10 @@ window.addEventListener('unhandledrejection', (e) => {
         out[iso].political = clip(out[iso].political + adj, 0, 100);
       }
     });
+    // Pre-compute composite per country so renders don't recompute it.
+    Object.keys(out).forEach(k => { out[k].composite = compositeOf(out[k]); });
     countryMetrics = out;
+    invalidatePolyColorCache();
   }
   // Get an ISO2 from a GeoJSON feature, trying every common property name
   // used by the various country GeoJSON sources.
@@ -1093,20 +1126,44 @@ window.addEventListener('unhandledrejection', (e) => {
     if (!globeInstance) return;
     const features = await loadCountryBorders();
     if (!features || !globeInstance.polygonsData) return;
+    // PERF: kill the default 1s polygon-transition animation. Recoloring
+    // 250 countries with a transition is the main cause of jank when
+    // switching metric layers.
+    try { if (globeInstance.polygonsTransitionDuration) globeInstance.polygonsTransitionDuration(0); } catch (e) {}
+    // Single colored layer with cached lookups. Composite is the default
+    // headline view → one rating per country. Sub-metrics still drillable.
     globeInstance
       .polygonsData(features)
       .polygonCapColor(f => {
-        if (currentMetric === 'off') return 'rgba(255,255,255,0.02)';
-        return metricColor(metricForCountry(featureIso(f), currentMetric));
+        const iso = featureIso(f);
+        const key = iso + ':' + currentMetric;
+        if (polyColorCache.has(key)) return polyColorCache.get(key);
+        // Lower alpha so event pins always read clearly on top of the fill.
+        const col = metricColor(metricForCountry(iso, currentMetric));
+        polyColorCache.set(key, col);
+        return col;
       })
       .polygonSideColor(() => 'rgba(0,0,0,0)')
-      .polygonStrokeColor(() => 'rgba(255,255,255,0.45)')
-      .polygonAltitude(() => currentMetric === 'off' ? 0.003 : 0.009)
+      .polygonStrokeColor(() => 'rgba(255,255,255,0.35)')
+      .polygonAltitude(() => 0.006)
       .polygonLabel(f => {
         const name = (f.properties && (f.properties.ADMIN || f.properties.name)) || '';
         const iso = featureIso(f);
         const m = countryMetrics[iso] || METRIC_BASELINE[iso];
-        if (!m || currentMetric === 'off') return `<div style="background:rgba(0,0,0,0.85);color:#fff;padding:6px 10px;border-radius:6px;font-family:ui-monospace,monospace;font-size:11px">${escapeHtml(name)}</div>`;
+        if (!m) return `<div style="background:rgba(0,0,0,0.85);color:#fff;padding:6px 10px;border-radius:6px;font-family:ui-monospace,monospace;font-size:11px">${escapeHtml(name)}</div>`;
+        // Composite mode: show all four sub-scores so users see the
+        // breakdown behind the one headline rating.
+        if (currentMetric === 'composite') {
+          const c = compositeOf(m);
+          return `<div style="background:rgba(0,0,0,0.92);color:#fff;padding:10px 13px;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;min-width:170px">
+            <div style="font-weight:800;font-size:12px;margin-bottom:6px">${escapeHtml(name)}</div>
+            <div style="color:#aaa;margin-bottom:4px">Combined: <b style="color:#fff">${(c||0).toFixed(0)} / 100</b></div>
+            <div style="font-size:10px;color:#888;line-height:1.6">
+              ⚔ War <b style="color:#fff">${(m.war||0).toFixed(0)}</b> &nbsp; $ Econ <b style="color:#fff">${(m.economics||0).toFixed(0)}</b><br>
+              ☯ Social <b style="color:#fff">${(m.social||0).toFixed(0)}</b> &nbsp; ⚖ Pol <b style="color:#fff">${(m.political||0).toFixed(0)}</b>
+            </div>
+          </div>`;
+        }
         const lab = currentMetric.charAt(0).toUpperCase() + currentMetric.slice(1);
         return `<div style="background:rgba(0,0,0,0.88);color:#fff;padding:8px 12px;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;min-width:140px">
           <div style="font-weight:800;margin-bottom:3px">${escapeHtml(name)}</div>
@@ -1116,27 +1173,31 @@ window.addEventListener('unhandledrejection', (e) => {
   }
   function applyMetricLayer() {
     if (!globeInstance) return;
-    // Re-trigger polygon recolor with the current accessor.
+    // Cache is metric-keyed, so bust + recolor when the user switches.
+    invalidatePolyColorCache();
     try {
       if (countryFeatures) {
         globeInstance
-          .polygonCapColor(f => currentMetric === 'off' ? 'rgba(255,255,255,0.02)' : metricColor(metricForCountry(featureIso(f), currentMetric)))
-          .polygonAltitude(() => currentMetric === 'off' ? 0.003 : 0.009);
+          .polygonCapColor(f => {
+            const iso = featureIso(f);
+            const key = iso + ':' + currentMetric;
+            if (polyColorCache.has(key)) return polyColorCache.get(key);
+            const col = metricColor(metricForCountry(iso, currentMetric));
+            polyColorCache.set(key, col);
+            return col;
+          })
+          .polygonAltitude(() => 0.006);
       }
     } catch (e) {}
-    // Buttons + legend
     document.querySelectorAll('.globe-metric-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.metric === currentMetric);
     });
     const legend = document.getElementById('globeMetricLegend');
     if (legend) {
-      if (currentMetric === 'off') legend.classList.remove('show');
-      else {
-        legend.classList.add('show');
-        legend.innerHTML = '<span class="globe-metric-legend-dot" style="background:rgb(74,222,128)"></span>STABLE'
-          + '<span class="globe-metric-legend-dot" style="background:rgb(252,211,77);margin-left:6px"></span>MOD'
-          + '<span class="globe-metric-legend-dot" style="background:rgb(248,113,113);margin-left:6px"></span>CRITICAL';
-      }
+      legend.classList.add('show');
+      legend.innerHTML = '<span class="globe-metric-legend-dot" style="background:rgb(74,222,128)"></span>STABLE'
+        + '<span class="globe-metric-legend-dot" style="background:rgb(252,211,77);margin-left:6px"></span>MOD'
+        + '<span class="globe-metric-legend-dot" style="background:rgb(248,113,113);margin-left:6px"></span>CRITICAL';
     }
     renderThreatBoard();
   }
@@ -1159,18 +1220,17 @@ window.addEventListener('unhandledrejection', (e) => {
     const titleEl = document.getElementById('threatBoardTitle');
     const levelEl = document.getElementById('threatBoardLevel');
     if (!board || !list) return;
-    if (currentMetric === 'off') { board.style.display = 'none'; return; }
     board.style.display = '';
-    const icons = { war:'⚔', economics:'$', social:'☯', political:'⚖' };
-    const labels = { war:'War / Conflict', economics:'Economic Risk', social:'Social Strain', political:'Political Risk' };
+    const icons = { composite:'◉', war:'⚔', economics:'$', social:'☯', political:'⚖' };
+    const labels = { composite:'Combined Risk', war:'War / Conflict', economics:'Economic Risk', social:'Social Strain', political:'Political Risk' };
     if (titleEl) titleEl.textContent = (icons[currentMetric] || '◉') + ' ' + (labels[currentMetric] || currentMetric);
 
-    // Merge baseline + live, rank by the active metric.
+    // Merge baseline + live, rank by the active metric. Composite is
+    // computed via compositeOf() so the board ranks combined risk too.
     const merged = {};
-    Object.keys(METRIC_BASELINE).forEach(k => merged[k] = METRIC_BASELINE[k][currentMetric]);
-    Object.keys(countryMetrics).forEach(k => {
-      if (countryMetrics[k] && countryMetrics[k][currentMetric] != null) merged[k] = countryMetrics[k][currentMetric];
-    });
+    const scoreOf = (row) => (currentMetric === 'composite') ? compositeOf(row) : (row ? row[currentMetric] : null);
+    Object.keys(METRIC_BASELINE).forEach(k => { const v = scoreOf(METRIC_BASELINE[k]); if (v != null) merged[k] = v; });
+    Object.keys(countryMetrics).forEach(k => { const v = scoreOf(countryMetrics[k]); if (v != null) merged[k] = v; });
     const rows = Object.keys(merged)
       .map(iso => ({ iso, score: merged[iso] }))
       .filter(r => r.score != null)
@@ -1227,6 +1287,21 @@ window.addEventListener('unhandledrejection', (e) => {
       applyMetricLayer();
     });
   });
+  // Collapsible Threat Board — clicking the header expands/collapses
+  // so the live feed underneath is always reachable. State persists.
+  const THREAT_COLLAPSED_KEY = 'hustle_threat_collapsed';
+  function applyThreatCollapse() {
+    const board = document.getElementById('threatBoard');
+    if (!board) return;
+    if (get(THREAT_COLLAPSED_KEY, false)) board.classList.add('collapsed');
+    else board.classList.remove('collapsed');
+  }
+  const threatBoardHead = document.getElementById('threatBoardHead');
+  if (threatBoardHead) threatBoardHead.addEventListener('click', () => {
+    set(THREAT_COLLAPSED_KEY, !get(THREAT_COLLAPSED_KEY, false));
+    applyThreatCollapse();
+  });
+  applyThreatCollapse();
   // Initial borders + metrics — fire after a beat so globe init wins.
   setTimeout(() => {
     ensureBorderLayer().then(() => {
