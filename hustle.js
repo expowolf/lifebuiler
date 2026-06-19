@@ -28,6 +28,14 @@ window.addEventListener('unhandledrejection', (e) => {
     scrapegraphKey: 'hustle_scrapegraph_api_key',  // ScrapeGraphAI
     globeMetric:    'hustle_globe_metric',         // active metric layer
   };
+  // ── Globe-related state hoisted to the top of the IIFE.
+  //    setTab() runs during initial script load and references
+  //    globeInstance via initGlobeIfNeeded(); without hoisting these
+  //    `let`s, the access throws TDZ ('Cannot access globeInstance
+  //    before initialization') and the whole globe init fails silently.
+  let globeInstance = null;
+  let globePoints = [];
+  let globeRotateInterval = null;
   function get(key, fallback) {
     try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
     catch (e) { return fallback; }
@@ -731,9 +739,8 @@ window.addEventListener('unhandledrejection', (e) => {
   // ============================================================
   // GLOBE
   // ============================================================
-  let globeInstance = null;
-  let globePoints = [];
-  let globeRotateInterval = null;
+  // (globeInstance / globePoints / globeRotateInterval are hoisted
+  //  to the top of the IIFE to avoid a TDZ error in setTab.)
 
   function setHudStatus(text) {
     const el = document.getElementById('hudStatus');
@@ -1708,22 +1715,41 @@ window.addEventListener('unhandledrejection', (e) => {
   //    contributed.
   async function fetchNewsdataExplicit(apiKey) {
     if (!apiKey) return [];
-    const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
+    // NewsData.io supports CORS for browser calls — direct fetch is the
+    // ONLY reliable path; proxies (corsproxy.io / codetabs / allorigins)
+    // currently 403/400 their endpoint. Free tier caps size at 10 and
+    // accepts only ONE category (size=50 + multiple categories returns 422).
+    const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=10`;
     try {
-      const j = await kronosFetchVia(url, 'json', 12000);
+      const res = await kronosFetchWithTimeout(url, 12000);
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        console.warn('[newsdata.io] HTTP', res.status, t.slice(0, 200));
+        return [];
+      }
+      const j = await res.json();
       if (j && Array.isArray(j.results)) {
         return j.results.map(r => ({ ...r, source_type: 'newsdata' }));
       }
+      console.warn('[newsdata.io] unexpected response:', j && (j.message || j.status));
     } catch (e) { console.warn('[newsdata.io] fetch failed:', e.message); }
     return [];
   }
   // ── WorldNewsAPI fetch. Endpoint: /search-news returns { news: [...] }
   //    with article-level country/sentiment fields we can lean on.
+  //    Direct CORS works for WorldNewsAPI; the public proxies currently
+  //    block our origin, so we skip them entirely.
   async function fetchWorldnewsExplicit(apiKey) {
     if (!apiKey) return [];
-    const url = `https://api.worldnewsapi.com/search-news?api-key=${encodeURIComponent(apiKey)}&language=en&number=50&sort=publish-time&sort-direction=DESC`;
+    const url = `https://api.worldnewsapi.com/search-news?api-key=${encodeURIComponent(apiKey)}&language=en&number=20&sort=publish-time&sort-direction=DESC`;
     try {
-      const j = await kronosFetchVia(url, 'json', 12000);
+      const res = await kronosFetchWithTimeout(url, 12000);
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        console.warn('[worldnewsapi] HTTP', res.status, t.slice(0, 200));
+        return [];
+      }
+      const j = await res.json();
       const arr = (j && j.news) || (j && j.articles) || [];
       // Normalize to our globe schema (matches fetchNews()'s expected shape)
       return arr.map((a, i) => ({
@@ -1751,75 +1777,22 @@ window.addEventListener('unhandledrejection', (e) => {
   //    ScrapeGraphAI key isn't set OR its CORS proxy fails, so the
   //    feed always benefits from a 4th angle regardless.
   async function fetchScrapegraphExplicit(apiKey) {
+    // ScrapeGraphAI's /v1/smartscraper requires:
+    //   1. an async POST that returns a job-id (this app would have to
+    //      poll for the result over multiple round-trips), and
+    //   2. a server-side caller — every public CORS proxy fails the
+    //      POST preflight (codetabs/corsproxy/allorigins all block it).
+    // Honest result: this can't run from a pure static frontend. We
+    // keep the key stored (the Test button still validates the format)
+    // but skip the call entirely instead of burning a cycle on a fetch
+    // we know will fail. To enable real ScrapeGraph events, point the
+    // app at a tiny backend proxy that holds the key + does the polling.
     if (!apiKey) return [];
-    // SmartScraper API: POST { user_prompt, website_url } → returns a
-    // job-result object. Routed through codetabs because the scrapegraph
-    // endpoint isn't open to browser CORS.
-    const target = 'https://reliefweb.int/disasters';
-    const url = 'https://api.scrapegraphai.com/v1/smartscraper';
-    const body = JSON.stringify({
-      website_url: target,
-      user_prompt: 'Extract the 30 most recent humanitarian crises as a JSON list of objects with fields: title, country, type, date, url, description. Date format ISO.',
-    });
-    try {
-      const proxied = 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url);
-      const res = await fetch(proxied, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'SGAI-APIKEY': apiKey },
-        body,
-      });
-      if (res && res.ok) {
-        const j = await res.json();
-        // SmartScraper returns { result: { ...extracted } } — look for
-        // the list under common keys; tolerate shape changes.
-        const out = (j && j.result) || j || {};
-        const list = (Array.isArray(out) && out)
-          || out.events || out.crises || out.items || out.list
-          || (Array.isArray(out.disasters) && out.disasters) || [];
-        if (Array.isArray(list) && list.length) {
-          return list.slice(0, 50).map((d, i) => ({
-            article_id: 'sg' + i + '-' + (d.date || d.url || ''),
-            title: d.title || d.name || 'Humanitarian event',
-            description: d.description || d.summary || '',
-            country: d.country || d.location || '',
-            category: ['climate'],
-            link: d.url || target,
-            source_id: 'reliefweb.int (scrapegraphai)',
-            pubDate: d.date || new Date().toISOString(),
-            source_type: 'scrapegraph',
-          }));
-        }
-      }
-    } catch (e) { console.warn('[scrapegraphai] fetch failed:', e.message); }
-    // Public-API fallback so users get crisis context even if the
-    // ScrapeGraphAI proxy/path is having a bad day.
-    return await fetchReliefwebFallback();
-  }
-  // ReliefWeb's public API — no key, very stable, ISO-tagged. Used both
-  // as the ScrapeGraphAI fallback and as a free always-on event source.
-  async function fetchReliefwebFallback() {
-    const url = 'https://api.reliefweb.int/v1/disasters?appname=lifebuiler&profile=list&limit=30&sort[]=date:desc';
-    try {
-      const j = await kronosFetchVia(url, 'json', 10000);
-      const data = (j && j.data) || [];
-      return data.map((d, i) => {
-        const f = d.fields || {};
-        const country = (f.country && f.country[0] && (f.country[0].iso3 || f.country[0].name)) || '';
-        return {
-          article_id: 'rw-' + (d.id || i),
-          title: f.name || 'Humanitarian event',
-          description: (f.description || '').slice(0, 280),
-          country: country ? String(country).slice(0, 2).toLowerCase() : '',
-          category: ['climate'],
-          link: f.url || ('https://reliefweb.int/disaster/' + (d.id || '')),
-          source_id: 'reliefweb.int',
-          pubDate: (f.date && (f.date.created || f.date.original)) || new Date().toISOString(),
-          source_type: 'reliefweb',
-        };
-      });
-    } catch (e) { console.warn('[reliefweb] fetch failed:', e.message); }
+    console.info('[scrapegraphai] skipped: needs server-side proxy (browser POST is CORS-blocked + endpoint is async).');
     return [];
   }
+  // (ReliefWeb fetcher removed — their /v1/disasters endpoint now
+  //  returns 410 Gone and every CORS proxy is blocked from our origin.)
 
   // Supports both NewsAPI.org (32-char hex key) and NewsData.io (pub_ prefix).
   // NewsAPI.org's free Developer plan blocks browser requests, so we route
@@ -1854,23 +1827,37 @@ window.addEventListener('unhandledrejection', (e) => {
     if (!apiKey) return { source: 'newsapi', articles: [], error: null };
     const provider = detectNewsProvider(apiKey);
     if (provider === 'newsdata') {
-      const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
+      // Same fix as fetchNewsdataExplicit: direct CORS, free-tier size=10,
+      // no category param (multi-category triggers 422 on free tier).
+      const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=10`;
       try {
-        const j = await kronosFetchVia(url, 'json', 12000);
+        const res = await kronosFetchWithTimeout(url, 12000);
+        if (!res.ok) {
+          const t = await res.text().catch(() => '');
+          return { source: 'newsdata', articles: [], error: 'HTTP ' + res.status + (t ? ': ' + t.slice(0, 100) : '') };
+        }
+        const j = await res.json();
         if (j && Array.isArray(j.results)) {
           return { source: 'newsdata', articles: j.results.map(r => ({ ...r, source_type: 'newsdata' })), error: null };
         }
-        return { source: 'newsdata', articles: [], error: (j && (j.message || j.results)) || 'unexpected response shape' };
+        return { source: 'newsdata', articles: [], error: (j && j.message) || 'unexpected response shape' };
       } catch (e) { return { source: 'newsdata', articles: [], error: e.message || String(e) }; }
     }
-    // NewsAPI.org via proxy chain (free dev plan blocks browser direct).
+    // NewsAPI.org: free Developer plan returns 426 on ALL browser
+    // requests (their /v2/everything is server-side only). Every public
+    // CORS proxy we tried is also blocked. Surface this clearly so the
+    // user knows it's not the key — it's the plan tier.
     const newsapiUrl = 'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology%20OR%20business)&apiKey=' + encodeURIComponent(apiKey);
     try {
-      const j = await kronosFetchVia(newsapiUrl, 'json', 12000);
-      if (j && j.status === 'ok' && Array.isArray(j.articles)) {
+      const res = await kronosFetchWithTimeout(newsapiUrl, 8000);
+      const j = await res.json().catch(() => null);
+      if (res.ok && j && j.status === 'ok' && Array.isArray(j.articles)) {
         return { source: 'newsapi', articles: normalizeNewsApiArticles(j.articles).map(a => ({ ...a, source_type: 'newsapi' })), error: null };
       }
-      return { source: 'newsapi', articles: [], error: (j && j.message) || 'unexpected response shape' };
+      if (res.status === 426 || (j && j.code === 'corsNotAllowed')) {
+        return { source: 'newsapi', articles: [], error: 'free plan blocks browser calls — needs paid plan or server proxy' };
+      }
+      return { source: 'newsapi', articles: [], error: (j && j.message) || ('HTTP ' + res.status) };
     } catch (e) { return { source: 'newsapi', articles: [], error: e.message || String(e) }; }
   }
   // Wrap the explicit fetchers in the same shape too.
