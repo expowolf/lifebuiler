@@ -925,10 +925,19 @@ window.addEventListener('unhandledrejection', (e) => {
     set(KEYS.worldnewsKey,   grab('hkWorldnewsKey').trim());
     set(KEYS.scrapegraphKey, grab('hkScrapegraphKey').trim());
     const st = document.getElementById('hkStatus');
-    if (st) { st.textContent = '✓ Saved. Refreshing feed…'; st.style.color = 'var(--accent-mint)'; }
-    // Kick off a fresh fetch so the metric layer updates immediately.
-    fetchNews();
-    setTimeout(closeAllKeysModal, 900);
+    if (st) { st.textContent = '✓ Saved. Forcing fresh fetch from every source…'; st.style.color = 'var(--accent-mint)'; }
+    // Wipe the cache so stale single-source data can't shadow the new
+    // multi-source merge. Then run fetchNews — it'll re-populate from
+    // every configured source in parallel.
+    set(KEYS.newsCache, null);
+    globePoints = [];
+    fetchNews().then(() => {
+      const tally = (lastSourceStats || [])
+        .map(s => SRC_HUD_LABEL[s.source] + ':' + s.count + (s.error ? '(' + String(s.error).slice(0, 20) + ')' : ''))
+        .join(' · ');
+      if (st) st.textContent = tally ? ('Result: ' + tally) : '✓ Saved.';
+    });
+    setTimeout(closeAllKeysModal, 1800);
   });
   if (hkTestBtn) hkTestBtn.addEventListener('click', async () => {
     const st = document.getElementById('hkStatus');
@@ -1831,6 +1840,41 @@ window.addEventListener('unhandledrejection', (e) => {
     }));
   }
 
+  // ── Legacy newsKey adapter — wraps the existing-key path in the
+  //    same { source, articles, error } shape every other fetcher
+  //    returns, so the fan-out in fetchNews() treats it identically.
+  //    Critically: uses kronosFetchVia (timeout + proxy chain) so a
+  //    failure here can NEVER block the other sources from running.
+  async function fetchLegacyNewsKey(apiKey) {
+    if (!apiKey) return { source: 'newsapi', articles: [], error: null };
+    const provider = detectNewsProvider(apiKey);
+    if (provider === 'newsdata') {
+      const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
+      try {
+        const j = await kronosFetchVia(url, 'json', 12000);
+        if (j && Array.isArray(j.results)) {
+          return { source: 'newsdata', articles: j.results.map(r => ({ ...r, source_type: 'newsdata' })), error: null };
+        }
+        return { source: 'newsdata', articles: [], error: (j && (j.message || j.results)) || 'unexpected response shape' };
+      } catch (e) { return { source: 'newsdata', articles: [], error: e.message || String(e) }; }
+    }
+    // NewsAPI.org via proxy chain (free dev plan blocks browser direct).
+    const newsapiUrl = 'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology%20OR%20business)&apiKey=' + encodeURIComponent(apiKey);
+    try {
+      const j = await kronosFetchVia(newsapiUrl, 'json', 12000);
+      if (j && j.status === 'ok' && Array.isArray(j.articles)) {
+        return { source: 'newsapi', articles: normalizeNewsApiArticles(j.articles).map(a => ({ ...a, source_type: 'newsapi' })), error: null };
+      }
+      return { source: 'newsapi', articles: [], error: (j && j.message) || 'unexpected response shape' };
+    } catch (e) { return { source: 'newsapi', articles: [], error: e.message || String(e) }; }
+  }
+  // Wrap the explicit fetchers in the same shape too.
+  async function adaptNewsdata(key)    { try { const a = await fetchNewsdataExplicit(key);  return { source: 'newsdata',    articles: a, error: a.length ? null : 'no results' }; } catch (e) { return { source: 'newsdata',    articles: [], error: e.message || String(e) }; } }
+  async function adaptWorldnews(key)   { try { const a = await fetchWorldnewsExplicit(key); return { source: 'worldnews',   articles: a, error: a.length ? null : 'no results' }; } catch (e) { return { source: 'worldnews',   articles: [], error: e.message || String(e) }; } }
+  async function adaptScrapegraph(key) { try { const a = await fetchScrapegraphExplicit(key); return { source: 'scrapegraph', articles: a, error: a.length ? null : 'no results' }; } catch (e) { return { source: 'scrapegraph', articles: [], error: e.message || String(e) }; } }
+
+  let lastSourceStats = []; // [{source, count, error}] — surfaced in HUD + console
+
   async function fetchNews() {
     const apiKey = get(KEYS.newsKey, '');
     const newsdataKey = dsGetKey('newsdata');
@@ -1839,111 +1883,67 @@ window.addEventListener('unhandledrejection', (e) => {
     // Run if ANY source is configured. Existing newsKey behavior unchanged
     // when only it is set.
     if (!apiKey && !newsdataKey && !worldnewsKey && !scrapegraphKey) return;
-    const provider = apiKey ? detectNewsProvider(apiKey) : null;
     const status = document.getElementById('hudStatus');
     const setStatus = (text) => { if (status) status.textContent = text; };
     setStatus('STREAMING…');
 
-    try {
-      let articles = [];
-      if (!apiKey) {
-        // Skip the existing-key block entirely; the new-source merge below
-        // will populate articles.
-      } else if (provider === 'newsdata') {
-        const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&language=en&size=50&category=business,politics,technology,world`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data && data.results) articles = data.results.map(r => ({ ...r, source_type: 'newsdata' }));
-        else if (data && data.message) {
-          setStatus('API: ' + String(data.message).slice(0, 30).toUpperCase());
-          return;
-        }
-      } else {
-        // NewsAPI.org. Free dev plan blocks direct browser calls so we go
-        // straight to a CORS proxy. /v2/everything is used (top-headlines
-        // requires a country/category param and is more limited).
-        const newsapiUrl = 'https://newsapi.org/v2/everything?language=en&sortBy=publishedAt&pageSize=50&q=(market%20OR%20economy%20OR%20geopolitics%20OR%20politics%20OR%20technology%20OR%20business)&apiKey=' + encodeURIComponent(apiKey);
-        const proxies = [
-          'https://corsproxy.io/?url=' + encodeURIComponent(newsapiUrl),
-          'https://api.allorigins.win/raw?url=' + encodeURIComponent(newsapiUrl),
-        ];
-        let raw = null;
-        let lastError = null;
-        // Try direct first (works if user has a paid plan)
-        try {
-          const res = await fetch(newsapiUrl);
-          const data = await res.json();
-          if (data && data.status === 'ok' && Array.isArray(data.articles) && data.articles.length) {
-            raw = data.articles;
-          } else if (data && data.message) {
-            lastError = data.message;
-          }
-        } catch (e) { /* CORS — proxies will handle */ }
-        // Otherwise try each proxy
-        if (!raw) {
-          setStatus('PROXYING…');
-          for (const url of proxies) {
-            try {
-              const res = await fetch(url);
-              const data = await res.json();
-              if (data && data.status === 'ok' && Array.isArray(data.articles) && data.articles.length) {
-                raw = data.articles; break;
-              } else if (data && data.message) {
-                lastError = data.message;
-              }
-            } catch (e) { /* try next */ }
-          }
-        }
-        if (raw) articles = normalizeNewsApiArticles(raw).map(a => ({ ...a, source_type: 'newsapi' }));
-        else if (lastError) setStatus('NEWSAPI: ' + String(lastError).slice(0, 50).toUpperCase());
-      }
+    // Build the parallel fan-out. EVERY source is its own promise; a
+    // failure in one can NEVER block the others. The old code had the
+    // legacy block early-return on API errors, which is why only NewsAPI
+    // items showed when the other paths were skipped.
+    const tasks = [];
+    if (apiKey)                                      tasks.push(fetchLegacyNewsKey(apiKey));
+    if (newsdataKey && newsdataKey !== apiKey)       tasks.push(adaptNewsdata(newsdataKey));
+    if (worldnewsKey)                                tasks.push(adaptWorldnews(worldnewsKey));
+    if (scrapegraphKey)                              tasks.push(adaptScrapegraph(scrapegraphKey));
 
-      // ── Additive merge: pull from every extra source the user has
-      //    configured, IN PARALLEL, then de-dup by URL. Both the globe
-      //    pins and the side-panel live feed read from the same merged
-      //    set (via ingestNews → globePoints → renderGlobeFeed), so any
-      //    new source instantly contributes to both views.
-      const sourceTasks = [];
-      if (newsdataKey && newsdataKey !== apiKey) {
-        sourceTasks.push(fetchNewsdataExplicit(newsdataKey));
-      }
-      if (worldnewsKey) sourceTasks.push(fetchWorldnewsExplicit(worldnewsKey));
-      if (scrapegraphKey) sourceTasks.push(fetchScrapegraphExplicit(scrapegraphKey));
-      if (sourceTasks.length) {
-        setStatus('MERGING ' + (sourceTasks.length + (articles.length ? 1 : 0)) + ' SOURCES…');
-        const results = await Promise.all(sourceTasks);
-        results.forEach(extra => { if (extra && extra.length) articles = articles.concat(extra); });
-      }
-      if (articles.length) {
-        const seen = new Set();
-        articles = articles.filter(a => {
-          const u = (a.link || a.url || '').toLowerCase();
-          if (!u) return true;
-          if (seen.has(u)) return false;
-          seen.add(u);
-          return true;
-        });
-      }
+    setStatus('MERGING ' + tasks.length + ' SOURCES…');
+    let results;
+    try { results = await Promise.all(tasks); }
+    catch (e) { console.error('news fan-out failed', e); setStatus('OFFLINE'); return; }
 
-      if (articles && articles.length) {
-        ingestNews(articles);
-        set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 200) });
-        // Recompute country metrics whenever fresh news arrives.
-        computeCountryMetrics(articles);
-        applyMetricLayer();
-        // Count distinct contributing sources so the user can see at a
-        // glance how many APIs are feeding the view.
-        const contributors = new Set(articles.map(a => a.source_type).filter(Boolean));
-        setStatus('LIVE · ' + contributors.size + ' src · ' + new Date().toLocaleTimeString());
-        updateAISummary();
-      } else {
-        setStatus(provider === 'newsapi' ? 'NEWSAPI · CHECK KEY OR PLAN' : 'NO DATA');
-      }
-    } catch (e) {
-      console.error('news fetch failed', e);
-      setStatus('OFFLINE');
+    // Collect, dedup, surface per-source counts.
+    let articles = [];
+    lastSourceStats = results.map(r => ({ source: r.source, count: r.articles.length, error: r.error }));
+    results.forEach(r => { if (r.articles && r.articles.length) articles = articles.concat(r.articles); });
+
+    if (articles.length) {
+      const seen = new Set();
+      articles = articles.filter(a => {
+        const u = (a.link || a.url || '').toLowerCase();
+        if (!u) return true;
+        if (seen.has(u)) return false;
+        seen.add(u);
+        return true;
+      });
+    }
+
+    // Console diagnostic so the user can see exactly what each source
+    // returned (or why it failed) without opening DevTools network tab.
+    console.log('[news] sources:', lastSourceStats);
+
+    if (articles.length) {
+      ingestNews(articles);
+      set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 200) });
+      computeCountryMetrics(articles);
+      applyMetricLayer();
+      // HUD: show every source's individual contribution so the user
+      // can verify all keys are pulling weight.
+      const tally = lastSourceStats
+        .filter(s => s.count > 0)
+        .map(s => SRC_HUD_LABEL[s.source] + ':' + s.count)
+        .join(' · ');
+      const failures = lastSourceStats.filter(s => s.count === 0 && s.error).length;
+      setStatus('LIVE · ' + (tally || 'no items') + (failures ? ' · ' + failures + ' failed' : ''));
+      updateAISummary();
+    } else {
+      // Surface the first error so it's not a silent dead end.
+      const firstErr = lastSourceStats.find(s => s.error);
+      setStatus(firstErr ? (SRC_HUD_LABEL[firstErr.source] || firstErr.source).toUpperCase() + ': ' + String(firstErr.error).slice(0, 40).toUpperCase() : 'NO DATA');
     }
   }
+  // Compact source labels for the HUD tally
+  const SRC_HUD_LABEL = { newsapi:'NA', newsdata:'ND', worldnews:'WN', scrapegraph:'SG', reliefweb:'RW' };
   // Re-fetch every 5 minutes (NewsData free tier has rate limits)
   setInterval(fetchNews, 5 * 60 * 1000);
 
