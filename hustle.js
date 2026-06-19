@@ -764,17 +764,22 @@ window.addEventListener('unhandledrejection', (e) => {
         .pointAltitude('alt')
         .pointColor('color')
         .pointRadius('radius')
-        .pointResolution(8)
+        // PERF: 4 segments per point sphere (was 8). 200 points × half
+        // the geometry = ~75% fewer triangles on the WebGL pass.
+        .pointResolution(4)
         .pointLabel(d => `<div style="background:rgba(11,12,24,0.92);color:#FAFAFA;padding:8px 12px;border-radius:8px;font-family:ui-monospace,monospace;font-size:11.5px;border:1px solid rgba(255,255,255,0.10);max-width:260px;line-height:1.4">
           <div style="color:${d.color};font-size:9.5px;letter-spacing:0.16em;font-weight:800;margin-bottom:4px">${d.cat.toUpperCase()} · ${d.country}</div>
           <div style="font-weight:600">${escapeHtml(d.title.slice(0, 110))}${d.title.length > 110 ? '…' : ''}</div>
         </div>`)
         .onPointClick(p => openGlobeDetail(p))
+        // PERF: rings disabled. They spawned a new animated wave on
+        // every hotspot every 1.4s — that's a constant GPU re-render
+        // loop even when the user is just reading. Pin colors already
+        // convey urgency.
         .ringsData([])
-        .ringColor(() => t => `rgba(125,211,252, ${1 - t})`)
-        .ringMaxRadius(4)
-        .ringPropagationSpeed(2)
-        .ringRepeatPeriod(1400)
+        .ringMaxRadius(0)
+        .ringPropagationSpeed(0)
+        .ringRepeatPeriod(0)
         (stage);
 
       // Cinematic settings. autoRotate defaults OFF — it forces a redraw
@@ -1160,7 +1165,7 @@ window.addEventListener('unhandledrejection', (e) => {
       })
       .polygonSideColor(() => 'rgba(0,0,0,0)')
       .polygonStrokeColor(() => 'rgba(255,255,255,0.35)')
-      .polygonAltitude(() => 0.006)
+      .polygonAltitude(0.001)
       .polygonLabel(f => {
         const name = (f.properties && (f.properties.ADMIN || f.properties.name)) || '';
         const iso = featureIso(f);
@@ -1201,7 +1206,7 @@ window.addEventListener('unhandledrejection', (e) => {
             polyColorCache.set(key, col);
             return col;
           })
-          .polygonAltitude(() => 0.006);
+          .polygonAltitude(0.001);
       }
     } catch (e) {}
     document.querySelectorAll('.globe-metric-btn').forEach(b => {
@@ -1621,11 +1626,11 @@ window.addEventListener('unhandledrejection', (e) => {
       };
     });
     if (globeInstance) {
-      globeInstance.pointsData(globePoints);
-      // Add pulsing rings on the top hotspots (highest urgency)
-      const hot = globePoints.filter(p => p.cat === 'war' || p.cat === 'markets').slice(0, 8);
-      globeInstance.ringsData(hot.map(p => ({ lat: p.lat, lng: p.lng, color: p.color })))
-        .ringColor(d => t => d.color.replace(')', `,${(1 - t).toFixed(2)})`).replace('#', 'rgba(0,0,0,').replace(/^rgba\(0,0,0,([^,]+)$/, 'rgba(0,0,0,'+ '0' +')'));
+      // PERF: only push 100 points to the WebGL layer (was unbounded).
+      // Live feed sidebar still gets the full set via globePoints.
+      globeInstance.pointsData(globePoints.slice(0, 100));
+      // Rings removed — they spawned animated waves on every hotspot
+      // every 1.4s, forcing a constant GPU re-render even when idle.
     }
     renderGlobeFeed();
     const hudEvents = document.getElementById('hudEvents');
@@ -1908,14 +1913,30 @@ window.addEventListener('unhandledrejection', (e) => {
     results.forEach(r => { if (r.articles && r.articles.length) articles = articles.concat(r.articles); });
 
     if (articles.length) {
+      // ── ACCUMULATE across refreshes instead of replacing.
+      //    The previous code overwrote the cache on every fetch, so if
+      //    NewsAPI returned 30 items at T=0 and only WorldNews responded
+      //    at T=5min, the NewsAPI items vanished and it looked like the
+      //    feed was "switching between APIs." Now: union previous cache
+      //    + fresh articles, dedup by URL, sort newest-first, keep 300.
+      //    Result: every source's contribution persists; new fetches
+      //    only ADD to the mix.
+      const prev = (get(KEYS.newsCache, null) || {}).events || [];
+      const combined = articles.concat(prev);
       const seen = new Set();
-      articles = articles.filter(a => {
+      articles = combined.filter(a => {
         const u = (a.link || a.url || '').toLowerCase();
         if (!u) return true;
         if (seen.has(u)) return false;
         seen.add(u);
         return true;
       });
+      articles.sort((a, b) => {
+        const da = Date.parse(a.pubDate || a.published_at || '') || 0;
+        const db = Date.parse(b.pubDate || b.published_at || '') || 0;
+        return db - da;
+      });
+      articles = articles.slice(0, 300);
     }
 
     // Console diagnostic so the user can see exactly what each source
@@ -1924,7 +1945,7 @@ window.addEventListener('unhandledrejection', (e) => {
 
     if (articles.length) {
       ingestNews(articles);
-      set(KEYS.newsCache, { ts: Date.now(), events: articles.slice(0, 200) });
+      set(KEYS.newsCache, { ts: Date.now(), events: articles });
       computeCountryMetrics(articles);
       applyMetricLayer();
       // HUD: show every source's individual contribution so the user
