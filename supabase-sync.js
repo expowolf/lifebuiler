@@ -40,7 +40,7 @@
   const SYNC_KEYS = new Set([
     'goal_streak_v1','subs','orders','wishlist','nw_currency','finance_active_tab',
   ]);
-  const SYNC_PREFIXES = ['goals:','nw:','wish:','order:','hustle_'];
+  const SYNC_PREFIXES = ['goals:','nw:','wish:','order:','hustle_','mow:'];
 
   function shouldSync(key) {
     if (!key) return false;
