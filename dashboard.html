@@ -868,6 +868,144 @@
     color: var(--text-primary);
   }
 
+  /* ============================================================
+     Component 5: Course Mowing Tracker
+     ============================================================ */
+  .mow-card { padding: 18px; margin-bottom: 18px; }
+  .mow-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .mow-header-left { flex: 1 1 auto; min-width: 0; }
+  .mow-eyebrow {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 6px;
+  }
+  .mow-progress-row { display: flex; align-items: baseline; gap: 6px; }
+  .mow-progress-num {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 34px; font-weight: 700; line-height: 1;
+    background: linear-gradient(180deg, #FFFFFF 0%, #C7C4BC 130%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .mow-progress-total {
+    font-family: ui-monospace, monospace; font-size: 15px;
+    color: var(--text-tertiary); font-weight: 600;
+  }
+  .mow-progress-label {
+    font-size: 11px; color: var(--text-tertiary); margin-left: 4px;
+    letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700;
+  }
+  .mow-header-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .mow-select {
+    padding: 7px 10px; border-radius: 8px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+    color: var(--text-primary); font-size: 12px; font-family: inherit;
+    cursor: pointer; outline: none;
+  }
+  .mow-btn-ghost {
+    padding: 7px 12px; border-radius: 8px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+    color: var(--text-secondary); font-size: 11.5px; font-weight: 700;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mow-btn-ghost:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+  .mow-btn-primary {
+    padding: 9px 14px; border-radius: 8px;
+    background: linear-gradient(135deg, #6BE3A4, #43C58A);
+    color: #02160A; border: none; font-size: 12.5px; font-weight: 800;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .mow-section { margin-top: 14px; }
+  .mow-section-h {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .mow-section-title {
+    font-size: 12.5px; font-weight: 700; color: var(--text-primary);
+    letter-spacing: 0.02em;
+  }
+  .mow-section-count {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    color: var(--text-tertiary); font-weight: 700;
+  }
+  /* Numbered pill grid — auto-fills, very mobile-friendly */
+  .mow-grid {
+    display: grid; gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
+  }
+  .mow-pill {
+    appearance: none; border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.03); color: var(--text-secondary);
+    font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700;
+    padding: 11px 0; border-radius: 10px; cursor: pointer; text-align: center;
+    -webkit-tap-highlight-color: transparent; min-height: 44px;
+    transition: background 0.15s, color 0.15s, transform 0.08s, border-color 0.15s;
+    position: relative;
+  }
+  .mow-pill:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+  .mow-pill:active { transform: scale(0.95); }
+  .mow-pill.done {
+    background: linear-gradient(135deg, rgba(107,227,164,0.22), rgba(67,197,138,0.18));
+    border-color: rgba(107,227,164,0.45);
+    color: #6BE3A4;
+  }
+  .mow-pill.done::after {
+    content: '✓'; position: absolute; top: 2px; right: 5px;
+    font-size: 9px; opacity: 0.85;
+  }
+  /* Extras list — full-width rows with checkbox + delete */
+  .mow-extras-list {
+    display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;
+  }
+  .mow-extra {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 8px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .mow-extra:hover { background: rgba(255,255,255,0.06); }
+  .mow-extra.done {
+    background: rgba(107,227,164,0.10); border-color: rgba(107,227,164,0.30);
+  }
+  .mow-extra-check {
+    width: 18px; height: 18px; border-radius: 5px; flex: 0 0 auto;
+    border: 1.5px solid rgba(255,255,255,0.25); display: inline-flex;
+    align-items: center; justify-content: center; font-size: 11px;
+    color: #02160A; font-weight: 800;
+  }
+  .mow-extra.done .mow-extra-check {
+    background: #6BE3A4; border-color: #6BE3A4;
+  }
+  .mow-extra-name { flex: 1 1 auto; font-size: 13.5px; color: var(--text-primary); }
+  .mow-extra.done .mow-extra-name { color: var(--text-tertiary); text-decoration: line-through; }
+  .mow-extra-del {
+    background: transparent; border: none; color: var(--text-tertiary);
+    font-size: 18px; cursor: pointer; padding: 4px 8px;
+    opacity: 0.5; transition: opacity 0.15s, color 0.15s;
+  }
+  .mow-extra-del:hover { opacity: 1; color: var(--danger); }
+  .mow-extra-add-row {
+    display: flex; gap: 8px; margin-top: 4px;
+  }
+  .mow-extra-input {
+    flex: 1; padding: 9px 12px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; color: var(--text-primary); font-size: 13px;
+    font-family: inherit; outline: none; min-height: 40px;
+  }
+  .mow-extra-input:focus { border-color: rgba(107,227,164,0.40); }
+  @media (max-width: 480px) {
+    .mow-grid { grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 5px; }
+    .mow-pill { padding: 12px 0; font-size: 14px; }
+    .mow-header-actions { width: 100%; }
+    .mow-select { flex: 1; }
+  }
+
   /* Mobile tweaks */
   @media (max-width: 720px) {
     /* ===== Header & Navigation ===== */
@@ -1080,6 +1218,61 @@
       <button id="tomorrowPolishBtn" class="gm-btn-secondary">✨ Polish</button>
     </div>
     <div id="tomorrowStatus" class="gm-status"></div>
+  </div>
+</div>
+
+<!-- Component 5: Course Mowing Tracker -->
+<div class="card mow-card" id="mowCard">
+  <div class="mow-header">
+    <div class="mow-header-left">
+      <div class="mow-eyebrow">Course mowing — <span id="mowDateLabel">today</span></div>
+      <div class="mow-progress-row">
+        <span class="mow-progress-num" id="mowDoneNum">0</span>
+        <span class="mow-progress-total" id="mowTotalNum">/ 0</span>
+        <span class="mow-progress-label">mowed</span>
+      </div>
+    </div>
+    <div class="mow-header-actions">
+      <select id="mowHolesSelect" class="mow-select" title="Number of holes on your course">
+        <option value="9">9 holes</option>
+        <option value="18" selected>18 holes</option>
+        <option value="27">27 holes</option>
+        <option value="36">36 holes</option>
+      </select>
+      <button id="mowMarkAllBtn" class="mow-btn-ghost" title="Mark every item done">✓ All</button>
+      <button id="mowResetBtn"   class="mow-btn-ghost" title="Reset today's tracker">↻ Reset</button>
+    </div>
+  </div>
+
+  <!-- Greens row -->
+  <div class="mow-section">
+    <div class="mow-section-h">
+      <span class="mow-section-title">▣ Greens</span>
+      <span class="mow-section-count" id="mowGreensCount">0 / 0</span>
+    </div>
+    <div class="mow-grid" id="mowGreensGrid"></div>
+  </div>
+
+  <!-- Tees row -->
+  <div class="mow-section">
+    <div class="mow-section-h">
+      <span class="mow-section-title">▲ Tee boxes</span>
+      <span class="mow-section-count" id="mowTeesCount">0 / 0</span>
+    </div>
+    <div class="mow-grid" id="mowTeesGrid"></div>
+  </div>
+
+  <!-- Extras (practice green, putting green, etc) -->
+  <div class="mow-section">
+    <div class="mow-section-h">
+      <span class="mow-section-title">＋ Extras</span>
+      <span class="mow-section-count" id="mowExtrasCount">0 / 0</span>
+    </div>
+    <div class="mow-extras-list" id="mowExtrasList"></div>
+    <div class="mow-extra-add-row">
+      <input type="text" id="mowExtraInput" class="mow-extra-input" placeholder="Add: Practice green, Driving range tees…" />
+      <button id="mowExtraAddBtn" class="mow-btn-primary">+ Add</button>
+    </div>
   </div>
 </div>
 
@@ -1838,6 +2031,161 @@
   setInterval(updateDayBar, 60 * 1000);
   startTicker();
 
+  // ============================================================
+  // COURSE MOWING TRACKER
+  // Daily checklist of greens + tee boxes (configurable hole count)
+  // + custom extras (practice green, range, etc). State stored under
+  // mow:state (synced via Supabase). Auto-resets at start of new day.
+  // ============================================================
+  const MOW_KEY = 'mow:state';
+  const MOW_DEFAULT_EXTRAS = ['Practice green', 'Putting green', 'Chipping green'];
+  function todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function loadMow() {
+    let s;
+    try { s = JSON.parse(localStorage.getItem(MOW_KEY) || 'null'); } catch (e) { s = null; }
+    if (!s || typeof s !== 'object') {
+      s = {
+        date: todayStr(),
+        holes: 18,
+        greens: new Array(18).fill(false),
+        tees:   new Array(18).fill(false),
+        extras: MOW_DEFAULT_EXTRAS.map((name, i) => ({ id: 'e' + i, name, done: false })),
+      };
+    }
+    // Auto-reset on day rollover — every checkbox starts fresh each day.
+    if (s.date !== todayStr()) {
+      s.date = todayStr();
+      s.greens = (s.greens || []).map(() => false);
+      s.tees   = (s.tees   || []).map(() => false);
+      s.extras = (s.extras || []).map(x => ({ ...x, done: false }));
+    }
+    // Normalize length to current hole count
+    const h = Math.max(1, Number(s.holes) || 18);
+    s.holes = h;
+    while (s.greens.length < h) s.greens.push(false);
+    while (s.tees.length   < h) s.tees.push(false);
+    s.greens.length = h;
+    s.tees.length   = h;
+    return s;
+  }
+  function saveMow(s) { localStorage.setItem(MOW_KEY, JSON.stringify(s)); }
+
+  function renderMow() {
+    const s = loadMow();
+    const greensGrid = document.getElementById('mowGreensGrid');
+    const teesGrid   = document.getElementById('mowTeesGrid');
+    const extrasList = document.getElementById('mowExtrasList');
+    if (!greensGrid || !teesGrid || !extrasList) return;
+
+    // Date label
+    const dateLabel = document.getElementById('mowDateLabel');
+    if (dateLabel) {
+      const d = new Date();
+      dateLabel.textContent = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+
+    // Holes selector
+    const sel = document.getElementById('mowHolesSelect');
+    if (sel) sel.value = String(s.holes);
+
+    // Pills — greens
+    greensGrid.innerHTML = s.greens.map((done, i) =>
+      `<button class="mow-pill ${done ? 'done' : ''}" data-kind="greens" data-i="${i}" title="Hole ${i+1} green">${i+1}</button>`
+    ).join('');
+    // Pills — tees
+    teesGrid.innerHTML = s.tees.map((done, i) =>
+      `<button class="mow-pill ${done ? 'done' : ''}" data-kind="tees" data-i="${i}" title="Hole ${i+1} tee box">${i+1}</button>`
+    ).join('');
+    // Extras
+    extrasList.innerHTML = s.extras.map((x, i) =>
+      `<div class="mow-extra ${x.done ? 'done' : ''}" data-i="${i}">
+        <span class="mow-extra-check">${x.done ? '✓' : ''}</span>
+        <span class="mow-extra-name">${escapeMowText(x.name)}</span>
+        <button class="mow-extra-del" data-del="${i}" title="Remove">×</button>
+      </div>`
+    ).join('');
+
+    // Counters
+    const gDone = s.greens.filter(Boolean).length;
+    const tDone = s.tees.filter(Boolean).length;
+    const eDone = s.extras.filter(x => x.done).length;
+    const eTot  = s.extras.length;
+    document.getElementById('mowGreensCount').textContent  = gDone + ' / ' + s.holes;
+    document.getElementById('mowTeesCount').textContent    = tDone + ' / ' + s.holes;
+    document.getElementById('mowExtrasCount').textContent  = eDone + ' / ' + eTot;
+    document.getElementById('mowDoneNum').textContent      = String(gDone + tDone + eDone);
+    document.getElementById('mowTotalNum').textContent     = '/ ' + (s.holes * 2 + eTot);
+  }
+  function escapeMowText(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Event delegation — pills, extras, and controls
+  document.getElementById('mowGreensGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.mow-pill'); if (!btn) return;
+    const s = loadMow();
+    const i = parseInt(btn.dataset.i, 10);
+    s.greens[i] = !s.greens[i];
+    saveMow(s); renderMow();
+  });
+  document.getElementById('mowTeesGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.mow-pill'); if (!btn) return;
+    const s = loadMow();
+    const i = parseInt(btn.dataset.i, 10);
+    s.tees[i] = !s.tees[i];
+    saveMow(s); renderMow();
+  });
+  document.getElementById('mowExtrasList').addEventListener('click', e => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      const s = loadMow();
+      s.extras.splice(parseInt(del.dataset.del, 10), 1);
+      saveMow(s); renderMow();
+      return;
+    }
+    const row = e.target.closest('.mow-extra'); if (!row) return;
+    const s = loadMow();
+    const i = parseInt(row.dataset.i, 10);
+    s.extras[i].done = !s.extras[i].done;
+    saveMow(s); renderMow();
+  });
+  document.getElementById('mowExtraAddBtn').addEventListener('click', () => {
+    const inp = document.getElementById('mowExtraInput');
+    const name = inp.value.trim();
+    if (!name) return;
+    const s = loadMow();
+    s.extras.push({ id: 'e' + Date.now(), name, done: false });
+    saveMow(s); inp.value = ''; renderMow();
+  });
+  document.getElementById('mowExtraInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('mowExtraAddBtn').click();
+  });
+  document.getElementById('mowHolesSelect').addEventListener('change', e => {
+    const s = loadMow();
+    s.holes = Math.max(1, parseInt(e.target.value, 10) || 18);
+    saveMow(s); renderMow();
+  });
+  document.getElementById('mowMarkAllBtn').addEventListener('click', () => {
+    const s = loadMow();
+    s.greens = s.greens.map(() => true);
+    s.tees   = s.tees.map(() => true);
+    s.extras = s.extras.map(x => ({ ...x, done: true }));
+    saveMow(s); renderMow();
+  });
+  document.getElementById('mowResetBtn').addEventListener('click', () => {
+    const s = loadMow();
+    s.greens = s.greens.map(() => false);
+    s.tees   = s.tees.map(() => false);
+    s.extras = s.extras.map(x => ({ ...x, done: false }));
+    saveMow(s); renderMow();
+  });
+  renderMow();
+  // Re-render once a minute so the date label / auto-reset stays current.
+  setInterval(renderMow, 60 * 1000);
+
   window.addEventListener('supabase-hydrated', () => {
     sessionStorage.setItem('sb_session_reloaded', '1');
     rollover();
@@ -1845,6 +2193,7 @@
     loadToday();
     loadTomorrow();
     renderStreak();
+    renderMow();
     window.dispatchEvent(new CustomEvent('goals-changed'));
   });
 </script>
