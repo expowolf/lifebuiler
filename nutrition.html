@@ -49,6 +49,8 @@
   .btn-primary { background:linear-gradient(135deg,#6BE3A4,#43C58A); color:#02160A; }
   .btn-ghost { background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text-2); }
   .btn-ai { background:linear-gradient(135deg,#6BE3A4,#7DD3FC); color:#021018; }
+  .btn-scan { width:100%; background:linear-gradient(135deg,#B794F4,#7DD3FC); color:#0A0420; margin-top:4px; }
+  .btn-scan:disabled { opacity:0.6; cursor:default; }
   .ai-actions { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
   .ai-out { white-space:pre-wrap; font-size:13.5px; line-height:1.6; color:var(--text-1); background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:12px; padding:14px; min-height:40px; }
   .ai-out.empty { color:var(--text-3); font-style:italic; }
@@ -95,6 +97,12 @@
   <div class="eyebrow">Meal log</div>
   <div id="mealList"></div>
   <div id="mealEmpty" class="muted" style="padding:10px 0">No meals logged yet today. Add your first below.</div>
+  <!-- Photo scan — Claude vision estimates the macros from a picture -->
+  <button class="btn btn-scan" id="scanBtn">📷 Scan meal from photo</button>
+  <input type="file" id="scanInput" accept="image/*" capture="environment" style="display:none" />
+  <div id="scanStatus" class="muted" style="margin-top:8px;display:none"></div>
+  <img id="scanPreview" alt="" style="display:none;width:100%;max-height:200px;object-fit:cover;border-radius:10px;margin-top:8px;border:1px solid var(--border)" />
+
   <div class="add-grid">
     <input type="text" id="mName" placeholder="Meal (e.g. Chicken + rice)" />
     <div class="add-grid-row">
@@ -219,6 +227,80 @@ Red flags: weight stalled 3+ wks -> +200 cal; protein missing by >20g -> push pr
   });
   document.getElementById('mName').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('mCal').focus(); });
   document.getElementById('mF').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('addMeal').click(); });
+
+  // ── Photo meal scan — Claude vision estimates the macros ──
+  const scanBtn=document.getElementById('scanBtn'), scanInput=document.getElementById('scanInput');
+  const scanStatus=document.getElementById('scanStatus'), scanPreview=document.getElementById('scanPreview');
+  function scanMsg(t,color){ scanStatus.style.display=''; scanStatus.textContent=t; scanStatus.style.color=color||'var(--text-3)'; }
+  scanBtn.addEventListener('click', ()=>{
+    if(!get(APIKEY_KEY,'')){ scanMsg('Paste your Anthropic API key below first — photo scanning uses Claude vision.','var(--danger)'); return; }
+    scanInput.click();
+  });
+  // Downscale a File to a base64 JPEG (max edge ~1024px) so phone photos
+  // (often several MB) become a small, fast request.
+  function fileToScaledBase64(file){
+    return new Promise((resolve,reject)=>{
+      const img=new Image(); const url=URL.createObjectURL(file);
+      img.onload=()=>{
+        URL.revokeObjectURL(url);
+        const max=1024; let w=img.width, h=img.height;
+        if(w>h && w>max){ h=Math.round(h*max/w); w=max; }
+        else if(h>max){ w=Math.round(w*max/h); h=max; }
+        const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+        cv.getContext('2d').drawImage(img,0,0,w,h);
+        const dataUrl=cv.toDataURL('image/jpeg',0.8);
+        resolve({ b64: dataUrl.split(',')[1], preview: dataUrl });
+      };
+      img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error('Could not read image')); };
+      img.src=url;
+    });
+  }
+  scanInput.addEventListener('change', async ()=>{
+    const file=scanInput.files && scanInput.files[0];
+    scanInput.value=''; // allow re-selecting the same file
+    if(!file) return;
+    const key=get(APIKEY_KEY,'');
+    if(!key){ scanMsg('Add your Anthropic API key below to enable scanning.','var(--danger)'); return; }
+    scanBtn.disabled=true; scanMsg('Reading photo…');
+    let img;
+    try{ img=await fileToScaledBase64(file); }
+    catch(e){ scanMsg('Could not read that image — try another.','var(--danger)'); scanBtn.disabled=false; return; }
+    scanPreview.src=img.preview; scanPreview.style.display='';
+    scanMsg('Cal AI is analyzing the meal…','var(--protein)');
+    try{
+      const res=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{ 'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+        body: JSON.stringify({
+          model: MODEL, max_tokens: 400,
+          system: 'You are Cal AI, a nutrition vision estimator. Identify the food in the image and estimate the TOTAL macros for the full portion shown. Account for visible quantity and typical preparation. Respond with ONLY a JSON object, no prose, no markdown fences: {"name": string, "cal": number, "protein": number, "carbs": number, "fat": number, "confidence": "low"|"medium"|"high", "note": short string}. Numbers are grams except cal (kcal). If unsure, give your best estimate and set confidence accordingly.',
+          messages:[{ role:'user', content:[
+            { type:'image', source:{ type:'base64', media_type:'image/jpeg', data: img.b64 } },
+            { type:'text', text:'Estimate the calories and macros for this meal. Return only the JSON object.' }
+          ]}]
+        })
+      });
+      const j=await res.json();
+      if(j && j.error){ scanMsg('API error: '+(j.error.message||'unknown'),'var(--danger)'); scanBtn.disabled=false; return; }
+      const txt=(j && j.content && j.content[0] && j.content[0].text) || '';
+      let data=null;
+      try{ data=JSON.parse(txt.replace(/^```(json)?/i,'').replace(/```$/,'').trim()); }
+      catch(e){ const m=txt.match(/\{[\s\S]*\}/); if(m){ try{ data=JSON.parse(m[0]); }catch(e2){} } }
+      if(!data || typeof data!=='object'){ scanMsg('Could not parse the estimate — try a clearer photo or log it manually.','var(--danger)'); scanBtn.disabled=false; return; }
+      document.getElementById('mName').value=data.name||'Scanned meal';
+      document.getElementById('mCal').value=Math.round(+data.cal||0);
+      document.getElementById('mP').value=Math.round(+data.protein||0);
+      document.getElementById('mC').value=Math.round(+data.carbs||0);
+      document.getElementById('mF').value=Math.round(+data.fat||0);
+      const conf=(data.confidence||'').toString();
+      scanMsg('✓ '+(data.name||'Meal')+': '+Math.round(+data.cal||0)+' cal · '+Math.round(+data.protein||0)+'P '+Math.round(+data.carbs||0)+'C '+Math.round(+data.fat||0)+'F'
+        +(conf?(' · '+conf+' confidence'):'')+'. Review the numbers, then tap “+ Add meal.”'
+        +(data.note?('  ('+data.note+')'):''), 'var(--protein)');
+    }catch(e){
+      scanMsg('Could not reach Claude vision ('+(e.message||e)+'). Log manually instead.','var(--danger)');
+    }
+    scanBtn.disabled=false;
+  });
   document.getElementById('mealList').addEventListener('click', e=>{
     const b=e.target.closest('[data-i]'); if(!b) return;
     const meals=loadMeals(); meals.splice(+b.dataset.i,1); saveMeals(meals); render();
