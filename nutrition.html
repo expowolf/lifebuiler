@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#050506" />
+<title>Cal AI — Nutrition Coach</title>
+<style>
+  :root {
+    --bg: #050506; --card: rgba(255,255,255,0.04); --border: rgba(255,255,255,0.08);
+    --text-1: #FAFAFA; --text-2: #B8B6B0; --text-3: #76746E;
+    --cal: #7DD3FC; --protein: #6BE3A4; --carbs: #F2C063; --fat: #B794F4; --danger: #FF8A8A;
+    --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text-1); font-family: var(--font); -webkit-font-smoothing: antialiased; min-height: 100vh; }
+  body { max-width: 760px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 16px 90px; }
+  a { color: var(--cal); }
+  .head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  .title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+  .title .ai { background: linear-gradient(135deg,#6BE3A4,#7DD3FC); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .back { font-size:12px; font-weight:700; color:var(--text-3); text-decoration:none; padding:8px 12px; border:1px solid var(--border); border-radius:999px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+  .eyebrow { font-family: var(--mono); font-size: 10px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-3); margin-bottom: 12px; }
+  .macro-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .macro { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .macro-top { display:flex; align-items:baseline; justify-content:space-between; margin-bottom: 8px; }
+  .macro-label { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); }
+  .macro-val { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+  .macro-bar { height: 7px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+  .macro-fill { height: 100%; border-radius: 999px; transition: width 0.5s ease; }
+  .macro-sub { font-family: var(--mono); font-size: 10px; color: var(--text-3); margin-top: 6px; }
+  .meal { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid rgba(255,255,255,0.05); }
+  .meal:last-child { border-bottom:none; }
+  .meal-name { flex:1; font-size:13.5px; }
+  .meal-macros { font-family: var(--mono); font-size:11px; color:var(--text-3); }
+  .meal-del { background:none; border:none; color:var(--text-3); font-size:18px; cursor:pointer; padding:2px 6px; opacity:0.5; }
+  .meal-del:hover { opacity:1; color:var(--danger); }
+  .add-grid { display:grid; grid-template-columns: 1fr; gap:8px; margin-top:10px; }
+  .add-grid-row { display:grid; grid-template-columns: repeat(4,1fr); gap:6px; }
+  input, select, textarea {
+    width:100%; padding:10px 12px; background:rgba(0,0,0,0.30); border:1px solid var(--border);
+    border-radius:9px; color:var(--text-1); font-size:14px; font-family:inherit; outline:none;
+  }
+  input:focus, textarea:focus { border-color: rgba(125,211,252,0.45); }
+  input::placeholder { color:#4D4B47; }
+  .btn { padding:11px 16px; border:none; border-radius:10px; font-size:13.5px; font-weight:800; cursor:pointer; font-family:inherit; -webkit-tap-highlight-color:transparent; }
+  .btn-primary { background:linear-gradient(135deg,#6BE3A4,#43C58A); color:#02160A; }
+  .btn-ghost { background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text-2); }
+  .btn-ai { background:linear-gradient(135deg,#6BE3A4,#7DD3FC); color:#021018; }
+  .ai-actions { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .ai-out { white-space:pre-wrap; font-size:13.5px; line-height:1.6; color:var(--text-1); background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:12px; padding:14px; min-height:40px; }
+  .ai-out.empty { color:var(--text-3); font-style:italic; }
+  .muted { font-size:11.5px; color:var(--text-3); line-height:1.5; }
+  .key-row { display:flex; gap:8px; margin-top:8px; }
+  .weight-row { display:flex; gap:8px; align-items:center; }
+  @media (max-width:480px){ .macro-row{grid-template-columns:1fr 1fr;} .add-grid-row{grid-template-columns:1fr 1fr;} }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="title"><span class="ai">Cal AI</span> — Nutrition Coach</div>
+  <a href="dashboard.html" class="back">← Dashboard</a>
+</div>
+
+<div class="card">
+  <div class="eyebrow">Today · <span id="todayLabel">—</span> · target 2,600 cal</div>
+  <div class="macro-row">
+    <div class="macro">
+      <div class="macro-top"><span class="macro-label">Calories</span><span class="macro-val" id="calVal" style="color:var(--cal)">0 / 2600</span></div>
+      <div class="macro-bar"><div class="macro-fill" id="calBar" style="background:var(--cal);width:0%"></div></div>
+      <div class="macro-sub" id="calSub">2,600 to go</div>
+    </div>
+    <div class="macro">
+      <div class="macro-top"><span class="macro-label">Protein</span><span class="macro-val" id="pVal" style="color:var(--protein)">0 / 130g</span></div>
+      <div class="macro-bar"><div class="macro-fill" id="pBar" style="background:var(--protein);width:0%"></div></div>
+      <div class="macro-sub" id="pSub">130g to go · non-negotiable</div>
+    </div>
+    <div class="macro">
+      <div class="macro-top"><span class="macro-label">Carbs</span><span class="macro-val" id="cVal" style="color:var(--carbs)">0 / 325g</span></div>
+      <div class="macro-bar"><div class="macro-fill" id="cBar" style="background:var(--carbs);width:0%"></div></div>
+      <div class="macro-sub" id="cSub">325g to go</div>
+    </div>
+    <div class="macro">
+      <div class="macro-top"><span class="macro-label">Fat</span><span class="macro-val" id="fVal" style="color:var(--fat)">0 / 87g</span></div>
+      <div class="macro-bar"><div class="macro-fill" id="fBar" style="background:var(--fat);width:0%"></div></div>
+      <div class="macro-sub" id="fSub">87g to go</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="eyebrow">Meal log</div>
+  <div id="mealList"></div>
+  <div id="mealEmpty" class="muted" style="padding:10px 0">No meals logged yet today. Add your first below.</div>
+  <div class="add-grid">
+    <input type="text" id="mName" placeholder="Meal (e.g. Chicken + rice)" />
+    <div class="add-grid-row">
+      <input type="number" id="mCal" placeholder="cal" inputmode="numeric" />
+      <input type="number" id="mP" placeholder="protein" inputmode="numeric" />
+      <input type="number" id="mC" placeholder="carbs" inputmode="numeric" />
+      <input type="number" id="mF" placeholder="fat" inputmode="numeric" />
+    </div>
+    <button class="btn btn-primary" id="addMeal">+ Add meal</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="eyebrow">Weight · target +0.67 lb/week → 130 lb</div>
+  <div class="weight-row">
+    <input type="number" id="wVal" placeholder="Today's weight (lb)" inputmode="decimal" step="0.1" style="flex:1" />
+    <button class="btn btn-ghost" id="addWeight">Log</button>
+  </div>
+  <div class="muted" id="weightSummary" style="margin-top:10px">No weigh-ins logged yet. Weigh fasted, same time of day.</div>
+</div>
+
+<div class="card">
+  <div class="eyebrow">Cal AI coach</div>
+  <div class="ai-actions">
+    <button class="btn btn-ai" data-act="analyze_today">Analyze today</button>
+    <button class="btn btn-ai" data-act="suggest_meals">Suggest meals</button>
+    <button class="btn btn-ai" data-act="weekly_review">Weekly review</button>
+  </div>
+  <div class="ai-out empty" id="aiOut">Log a few meals, then tap “Analyze today.” Works offline with a built-in calculator; paste an Anthropic API key below for full AI coaching.</div>
+  <div style="margin-top:12px">
+    <div class="muted">Optional — paste your Anthropic API key for live AI coaching (stored only on this device):</div>
+    <div class="key-row">
+      <input type="password" id="apiKey" placeholder="sk-ant-…" autocomplete="off" />
+      <button class="btn btn-ghost" id="saveKey">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  const TARGET = { cal: 2600, p: 130, c: 325, f: 87 };
+  const WEEKLY_GAIN = 0.67;
+  const GOAL_WEIGHT = 130, START_WEIGHT = 114;
+
+  const CAL_AI_PROMPT = `You are Cal AI, a personalized nutrition coach for Wolfgang's bulk from 114 lbs to 130 lbs over 16 weeks.
+You are an AI nutrition advisor in Wolfgang's fitness dashboard. Targets: 2,600 cal (±100), protein 130g (minimum, non-negotiable), carbs 325g, fat 87g. Training 4 days/week (chest, back, arms). Goal: build muscle, not fat. Weekly weight target +0.67 lb/week.
+Respond data-first, direct, supportive but not coddling. Use short bullets, show numbers prominently, end with ONE actionable recommendation.
+- analyze_today: total the logged macros, show remaining vs targets, suggest 1-2 specific meals to close the gap, give adherence %.
+- suggest_meals: 3 quick home-cooked ideas with ingredient weights, macro breakdown, prep time, and why it fits the bulk.
+- weekly_review: average weight change vs +0.67 lb/week, calorie adjustment if needed (+200 if slow, -100 if fast), best/worst days, forward advice.
+Red flags: weight stalled 3+ wks -> +200 cal; protein missing by >20g -> push prep/powder; rapid gain >1.5 lb/wk -> -150 cal.`;
+
+  const MODEL = 'claude-sonnet-4-6';
+
+  const todayKey = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+  const LOG_KEY = () => 'nutrition:log:' + todayKey();
+  const WEIGHTS_KEY = 'nutrition:weights';
+  const APIKEY_KEY = 'nutrition:anthropic_key';
+  function get(k,f){ try{ const v=localStorage.getItem(k); return v==null?f:JSON.parse(v);}catch(e){return f;} }
+  function set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function loadMeals(){ return get(LOG_KEY(), []); }
+  function saveMeals(a){ set(LOG_KEY(), a); }
+  function totals(meals){
+    return meals.reduce((t,m)=>({cal:t.cal+(+m.cal||0),p:t.p+(+m.p||0),c:t.c+(+m.c||0),f:t.f+(+m.f||0)}),{cal:0,p:0,c:0,f:0});
+  }
+
+  function render(){
+    const meals = loadMeals();
+    const t = totals(meals);
+    document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+    const bar = (id, val, tgt) => { const el=document.getElementById(id); if(el) el.style.width = Math.min(100,(val/tgt)*100).toFixed(0)+'%'; };
+    const setTxt = (id, s) => { const el=document.getElementById(id); if(el) el.textContent=s; };
+    setTxt('calVal', Math.round(t.cal)+' / 2600'); bar('calBar', t.cal, TARGET.cal); setTxt('calSub', Math.max(0,TARGET.cal-t.cal).toFixed(0)+' to go');
+    setTxt('pVal', Math.round(t.p)+' / 130g'); bar('pBar', t.p, TARGET.p); setTxt('pSub', Math.max(0,TARGET.p-t.p).toFixed(0)+'g to go · non-negotiable');
+    setTxt('cVal', Math.round(t.c)+' / 325g'); bar('cBar', t.c, TARGET.c); setTxt('cSub', Math.max(0,TARGET.c-t.c).toFixed(0)+'g to go');
+    setTxt('fVal', Math.round(t.f)+' / 87g'); bar('fBar', t.f, TARGET.f); setTxt('fSub', Math.max(0,TARGET.f-t.f).toFixed(0)+'g to go');
+
+    const list = document.getElementById('mealList'), empty = document.getElementById('mealEmpty');
+    if(!meals.length){ list.innerHTML=''; empty.style.display=''; }
+    else {
+      empty.style.display='none';
+      list.innerHTML = meals.map((m,i)=>`<div class="meal">
+        <span class="meal-name">${esc(m.name)}</span>
+        <span class="meal-macros">${Math.round(+m.cal||0)} cal · ${Math.round(+m.p||0)}P ${Math.round(+m.c||0)}C ${Math.round(+m.f||0)}F</span>
+        <button class="meal-del" data-i="${i}" aria-label="Remove">×</button>
+      </div>`).join('');
+    }
+    renderWeights();
+  }
+
+  function renderWeights(){
+    const w = get(WEIGHTS_KEY, []).slice().sort((a,b)=>a.date.localeCompare(b.date));
+    const el = document.getElementById('weightSummary');
+    if(!w.length){ el.textContent='No weigh-ins logged yet. Weigh fasted, same time of day.'; return; }
+    const latest = w[w.length-1];
+    const toGo = (GOAL_WEIGHT - latest.lbs).toFixed(1);
+    let wk = '';
+    if(w.length>=2){
+      const recent = w.slice(-7), prev = w.slice(-14,-7);
+      if(prev.length){
+        const avg = a=>a.reduce((s,x)=>s+x.lbs,0)/a.length;
+        const delta = (avg(recent)-avg(prev));
+        const tag = delta>=WEEKLY_GAIN*0.8 && delta<=WEEKLY_GAIN*1.6 ? '✓ on track' : (delta<WEEKLY_GAIN*0.8?'↓ below target':'↑ above target');
+        wk = ` · 7-day Δ ${delta>=0?'+':''}${delta.toFixed(2)} lb/wk ${tag}`;
+      }
+    }
+    el.innerHTML = `Latest: <b style="color:var(--text-1)">${latest.lbs} lb</b> · ${toGo} lb to goal${wk} · ${w.length} weigh-in${w.length===1?'':'s'}`;
+  }
+
+  document.getElementById('addMeal').addEventListener('click', ()=>{
+    const name=(document.getElementById('mName').value||'').trim();
+    const cal=+document.getElementById('mCal').value||0;
+    if(!name && !cal) return;
+    const meals=loadMeals();
+    meals.push({ name:name||'Meal', cal, p:+document.getElementById('mP').value||0, c:+document.getElementById('mC').value||0, f:+document.getElementById('mF').value||0, ts:Date.now() });
+    saveMeals(meals);
+    ['mName','mCal','mP','mC','mF'].forEach(id=>document.getElementById(id).value='');
+    render();
+  });
+  document.getElementById('mName').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('mCal').focus(); });
+  document.getElementById('mF').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('addMeal').click(); });
+  document.getElementById('mealList').addEventListener('click', e=>{
+    const b=e.target.closest('[data-i]'); if(!b) return;
+    const meals=loadMeals(); meals.splice(+b.dataset.i,1); saveMeals(meals); render();
+  });
+  document.getElementById('addWeight').addEventListener('click', ()=>{
+    const v=parseFloat(document.getElementById('wVal').value); if(!isFinite(v)) return;
+    const w=get(WEIGHTS_KEY,[]);
+    const tk=todayKey();
+    const existing=w.find(x=>x.date===tk);
+    if(existing) existing.lbs=v; else w.push({date:tk,lbs:v});
+    set(WEIGHTS_KEY,w); document.getElementById('wVal').value=''; renderWeights();
+  });
+
+  const keyInput=document.getElementById('apiKey');
+  keyInput.value = get(APIKEY_KEY,'') || '';
+  document.getElementById('saveKey').addEventListener('click', ()=>{
+    set(APIKEY_KEY, (keyInput.value||'').trim());
+    const el=document.getElementById('aiOut'); el.classList.remove('empty'); el.textContent='✓ Key saved on this device. AI coaching enabled.';
+  });
+
+  document.querySelectorAll('[data-act]').forEach(btn=>{
+    btn.addEventListener('click', ()=> runCoach(btn.dataset.act));
+  });
+
+  async function runCoach(action){
+    const out=document.getElementById('aiOut');
+    const meals=loadMeals(), t=totals(meals);
+    const weights=get(WEIGHTS_KEY,[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+    const key=get(APIKEY_KEY,'');
+
+    let userMessage='';
+    if(action==='analyze_today'){
+      userMessage = `Action: analyze_today.\nToday's meal log: ${JSON.stringify(meals.map(m=>({name:m.name,cal:m.cal,protein:m.p,carbs:m.c,fat:m.f})))}\nRunning totals: ${Math.round(t.cal)} cal, ${Math.round(t.p)}g protein, ${Math.round(t.c)}g carbs, ${Math.round(t.f)}g fat.`;
+    } else if(action==='suggest_meals'){
+      const rem={cal:TARGET.cal-t.cal,p:TARGET.p-t.p,c:TARGET.c-t.c,f:TARGET.f-t.f};
+      userMessage = `Action: suggest_meals. Remaining today: ${Math.round(rem.cal)} cal, ${Math.round(rem.p)}g protein, ${Math.round(rem.c)}g carbs, ${Math.round(rem.f)}g fat. Suggest 3 home-cooked meals to help close this.`;
+    } else {
+      userMessage = `Action: weekly_review. Weigh-ins (date, lb): ${JSON.stringify(weights.slice(-14))}. Target +${WEEKLY_GAIN} lb/week toward ${GOAL_WEIGHT} lb.`;
+    }
+
+    if(!key){
+      out.classList.remove('empty');
+      out.textContent = localCoach(action, meals, t, weights);
+      return;
+    }
+
+    out.classList.remove('empty'); out.textContent='Cal AI is thinking…';
+    try{
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method:'POST',
+        headers:{
+          'content-type':'application/json',
+          'x-api-key':key,
+          'anthropic-version':'2023-06-01',
+          'anthropic-dangerous-direct-browser-access':'true'
+        },
+        body: JSON.stringify({
+          model: MODEL, max_tokens: 700, system: CAL_AI_PROMPT,
+          messages:[{ role:'user', content: userMessage }]
+        })
+      });
+      const j = await res.json();
+      if(j && j.content && j.content[0] && j.content[0].text){ out.textContent = j.content[0].text.trim(); }
+      else if(j && j.error){ out.textContent = 'API error: '+(j.error.message||'unknown')+'\n\n— Falling back to local calculator —\n\n'+localCoach(action,meals,t,weights); }
+      else { out.textContent = localCoach(action,meals,t,weights); }
+    }catch(e){
+      out.textContent = 'Could not reach Claude ('+(e.message||e)+').\n\n— Local calculator —\n\n'+localCoach(action,meals,t,weights);
+    }
+  }
+
+  function localCoach(action, meals, t, weights){
+    if(action==='suggest_meals'){
+      const rem = Math.max(0, TARGET.p - t.p);
+      return [
+        'Meal ideas to close your remaining macros:',
+        '',
+        '1) Chicken + rice + broccoli — 8 oz chicken (raw) + 1.5 cups rice (dry) + 3 cups broccoli',
+        '   ~1,050 cal · 56P · 135C · 12F · 25 min · high protein/carbs, low fat — ideal bulk staple',
+        '',
+        '2) Greek yogurt + granola + banana + honey — 2 cups yogurt + 1 cup granola + 1 banana',
+        '   ~620 cal · 44P · 95C · 10F · 3 min · fast protein + carbs between meals',
+        '',
+        '3) Beef + potatoes — 8 oz 90/10 beef + 2 medium potatoes + olive oil',
+        '   ~780 cal · 50P · 70C · 30F · 25 min · calorie-dense for surplus days',
+        '',
+        rem>0 ? `You still need ~${Math.round(rem)}g protein today — option 1 or 2 covers most of it.` : 'Protein target already met — pick by remaining calories.'
+      ].join('\n');
+    }
+    if(action==='weekly_review'){
+      const w = weights.slice();
+      if(w.length<2) return 'Log at least two weigh-ins (a week apart) for a trend review. Weigh fasted, same time of day.';
+      const recent=w.slice(-7), prev=w.slice(-14,-7);
+      const avg=a=>a.reduce((s,x)=>s+x.lbs,0)/a.length;
+      const delta = prev.length ? avg(recent)-avg(prev) : (recent[recent.length-1].lbs-recent[0].lbs);
+      const lines=[`Latest: ${w[w.length-1].lbs} lb · ${(GOAL_WEIGHT-w[w.length-1].lbs).toFixed(1)} lb to goal`,
+        `7-day change: ${delta>=0?'+':''}${delta.toFixed(2)} lb/wk (target +${WEEKLY_GAIN})`];
+      if(delta < WEEKLY_GAIN*0.8) lines.push('→ Below pace. Add ~200 cal/day (an extra carb+protein meal). Recheck in 1 week.');
+      else if(delta > 1.5) lines.push('→ Gaining fast (fat-gain risk). Trim ~150 cal/day.');
+      else lines.push('→ On track. Hold at 2,600 cal. Keep protein ≥130g.');
+      return lines.join('\n');
+    }
+    const adh = Math.round((t.cal/TARGET.cal)*100);
+    const lines=[
+      `So far: ${Math.round(t.cal)} cal · ${Math.round(t.p)}g P · ${Math.round(t.c)}g C · ${Math.round(t.f)}g F`,
+      `Remaining: ${Math.max(0,TARGET.cal-t.cal).toFixed(0)} cal · ${Math.max(0,TARGET.p-t.p).toFixed(0)}g P · ${Math.max(0,TARGET.c-t.c).toFixed(0)}g C · ${Math.max(0,TARGET.f-t.f).toFixed(0)}g F`,
+      `Adherence: ${adh}% of the 2,600 cal target.`
+    ];
+    const pShort = TARGET.p - t.p;
+    if(pShort > 20) lines.push(`⚠ Protein is ${Math.round(pShort)}g short — non-negotiable. Add chicken (6 oz = +42g) or a shake (+25g).`);
+    else if(t.cal < TARGET.cal-300) lines.push(`Close the calorie gap by dinner — add rice/potatoes + a protein source.`);
+    else if(t.cal > TARGET.cal+150) lines.push(`Slightly over — fine on a bulk; just keep fat in check.`);
+    else lines.push(`On pace for your +${WEEKLY_GAIN} lb/week target. Finish strong.`);
+    return lines.join('\n');
+  }
+
+  render();
+  window.addEventListener('supabase-hydrated', render);
+})();
+</script>
+<script src="supabase-sync.js" defer></script>
+</body>
+</html>
