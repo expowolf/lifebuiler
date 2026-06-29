@@ -51,6 +51,15 @@
   .btn-ai { background:linear-gradient(135deg,#6BE3A4,#7DD3FC); color:#021018; }
   .btn-scan { width:100%; background:linear-gradient(135deg,#B794F4,#7DD3FC); color:#0A0420; margin-top:4px; }
   .btn-scan:disabled { opacity:0.6; cursor:default; }
+  .food-search { margin-top:6px; }
+  .food-search-row { display:flex; gap:8px; margin-top:8px; }
+  .food-search-row #foodQuery { flex:1; }
+  .food-search-row #foodGrams { width:64px; flex:0 0 64px; text-align:center; }
+  .food-results { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .food-result { text-align:left; width:100%; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:10px; padding:9px 12px; cursor:pointer; color:var(--text-1); }
+  .food-result:hover { background:rgba(255,255,255,0.07); }
+  .food-result-name { font-size:13px; font-weight:600; }
+  .food-result-macros { font-family:var(--mono); font-size:10.5px; color:var(--text-3); margin-top:3px; }
   .ai-actions { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
   .ai-out { white-space:pre-wrap; font-size:13.5px; line-height:1.6; color:var(--text-1); background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:12px; padding:14px; min-height:40px; }
   .ai-out.empty { color:var(--text-3); font-style:italic; }
@@ -97,11 +106,20 @@
   <div class="eyebrow">Meal log</div>
   <div id="mealList"></div>
   <div id="mealEmpty" class="muted" style="padding:10px 0">No meals logged yet today. Add your first below.</div>
-  <!-- Photo scan — Claude vision estimates the macros from a picture -->
-  <button class="btn btn-scan" id="scanBtn">📷 Scan meal from photo</button>
-  <input type="file" id="scanInput" accept="image/*" capture="environment" style="display:none" />
-  <div id="scanStatus" class="muted" style="margin-top:8px;display:none"></div>
-  <img id="scanPreview" alt="" style="display:none;width:100%;max-height:200px;object-fit:cover;border-radius:10px;margin-top:8px;border:1px solid var(--border)" />
+  <!-- Keyless food lookup — scan a barcode (browser BarcodeDetector) or
+       search by name; both pull exact macros from Open Food Facts (free,
+       no API key). -->
+  <div class="food-search">
+    <button class="btn btn-scan" id="scanBtn">📷 Scan barcode</button>
+    <input type="file" id="scanInput" accept="image/*" capture="environment" style="display:none" />
+    <div class="food-search-row">
+      <input type="text" id="foodQuery" placeholder="🔍 …or search a food (e.g. chicken breast, oats)" />
+      <input type="number" id="foodGrams" value="100" min="1" inputmode="numeric" title="grams" />
+      <button class="btn btn-ghost" id="foodSearchBtn">Search</button>
+    </div>
+    <div id="foodStatus" class="muted" style="margin-top:8px;display:none"></div>
+    <div id="foodResults" class="food-results"></div>
+  </div>
 
   <div class="add-grid">
     <input type="text" id="mName" placeholder="Meal (e.g. Chicken + rice)" />
@@ -131,14 +149,8 @@
     <button class="btn btn-ai" data-act="suggest_meals">Suggest meals</button>
     <button class="btn btn-ai" data-act="weekly_review">Weekly review</button>
   </div>
-  <div class="ai-out empty" id="aiOut">Log a few meals, then tap “Analyze today.” Works offline with a built-in calculator; paste an Anthropic API key below for full AI coaching.</div>
-  <div style="margin-top:12px">
-    <div class="muted">Optional — paste your Anthropic API key for live AI coaching (stored only on this device):</div>
-    <div class="key-row">
-      <input type="password" id="apiKey" placeholder="sk-ant-…" autocomplete="off" />
-      <button class="btn btn-ghost" id="saveKey">Save</button>
-    </div>
-  </div>
+  <div class="ai-out empty" id="aiOut">Log a few meals, then tap “Analyze today.” Runs fully on-device — no API key, no internet needed for coaching.</div>
+  <div class="muted" style="margin-top:10px">100% keyless: coaching is computed locally; food macros come from the free Open Food Facts database.</div>
 </div>
 
 <script>
@@ -148,20 +160,9 @@
   const WEEKLY_GAIN = 0.67;
   const GOAL_WEIGHT = 130, START_WEIGHT = 114;
 
-  const CAL_AI_PROMPT = `You are Cal AI, a personalized nutrition coach for Wolfgang's bulk from 114 lbs to 130 lbs over 16 weeks.
-You are an AI nutrition advisor in Wolfgang's fitness dashboard. Targets: 2,600 cal (±100), protein 130g (minimum, non-negotiable), carbs 325g, fat 87g. Training 4 days/week (chest, back, arms). Goal: build muscle, not fat. Weekly weight target +0.67 lb/week.
-Respond data-first, direct, supportive but not coddling. Use short bullets, show numbers prominently, end with ONE actionable recommendation.
-- analyze_today: total the logged macros, show remaining vs targets, suggest 1-2 specific meals to close the gap, give adherence %.
-- suggest_meals: 3 quick home-cooked ideas with ingredient weights, macro breakdown, prep time, and why it fits the bulk.
-- weekly_review: average weight change vs +0.67 lb/week, calorie adjustment if needed (+200 if slow, -100 if fast), best/worst days, forward advice.
-Red flags: weight stalled 3+ wks -> +200 cal; protein missing by >20g -> push prep/powder; rapid gain >1.5 lb/wk -> -150 cal.`;
-
-  const MODEL = 'claude-sonnet-4-6';
-
   const todayKey = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   const LOG_KEY = () => 'nutrition:log:' + todayKey();
   const WEIGHTS_KEY = 'nutrition:weights';
-  const APIKEY_KEY = 'nutrition:anthropic_key';
   function get(k,f){ try{ const v=localStorage.getItem(k); return v==null?f:JSON.parse(v);}catch(e){return f;} }
   function set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -228,76 +229,91 @@ Red flags: weight stalled 3+ wks -> +200 cal; protein missing by >20g -> push pr
   document.getElementById('mName').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('mCal').focus(); });
   document.getElementById('mF').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('addMeal').click(); });
 
-  // ── Photo meal scan — Claude vision estimates the macros ──
+  // ── Keyless food lookup — barcode scan + Open Food Facts ──
   const scanBtn=document.getElementById('scanBtn'), scanInput=document.getElementById('scanInput');
-  const scanStatus=document.getElementById('scanStatus'), scanPreview=document.getElementById('scanPreview');
-  function scanMsg(t,color){ scanStatus.style.display=''; scanStatus.textContent=t; scanStatus.style.color=color||'var(--text-3)'; }
+  const foodStatus=document.getElementById('foodStatus'), foodResults=document.getElementById('foodResults');
+  const foodQuery=document.getElementById('foodQuery'), foodGrams=document.getElementById('foodGrams');
+  function foodMsg(t,color){ foodStatus.style.display=''; foodStatus.textContent=t; foodStatus.style.color=color||'var(--text-3)'; }
+
+  // Open Food Facts nutriments → macros scaled to N grams. OFF stores
+  // per-100g values; we scale by the grams box. Energy may be kcal or kJ.
+  function offMacros(product, grams){
+    const n = (product && product.nutriments) || {};
+    const per100kcal = (n['energy-kcal_100g'] != null) ? +n['energy-kcal_100g']
+      : (n['energy_100g'] != null ? +n['energy_100g']/4.184 : 0); // kJ → kcal
+    const f = (grams||100)/100;
+    return {
+      name: ([product.brands, product.product_name].filter(Boolean).join(' ').trim()) || product.product_name || 'Food',
+      cal: Math.round(per100kcal * f),
+      p:   Math.round((+n['proteins_100g']||0) * f),
+      c:   Math.round((+n['carbohydrates_100g']||0) * f),
+      ft:  Math.round((+n['fat_100g']||0) * f),
+    };
+  }
+  function fillFromFood(m){
+    document.getElementById('mName').value=m.name;
+    document.getElementById('mCal').value=m.cal;
+    document.getElementById('mP').value=m.p;
+    document.getElementById('mC').value=m.c;
+    document.getElementById('mF').value=m.ft;
+    foodMsg('✓ '+m.name+': '+m.cal+' cal · '+m.p+'P '+m.c+'C '+m.ft+'F (per '+(+foodGrams.value||100)+'g). Review, then tap “+ Add meal.”','var(--protein)');
+    foodResults.innerHTML='';
+  }
+
+  // Text search → list of products to pick from.
+  document.getElementById('foodSearchBtn').addEventListener('click', runFoodSearch);
+  foodQuery.addEventListener('keydown', e=>{ if(e.key==='Enter') runFoodSearch(); });
+  async function runFoodSearch(){
+    const q=(foodQuery.value||'').trim();
+    if(!q){ foodMsg('Type a food name to search.','var(--danger)'); return; }
+    foodResults.innerHTML=''; foodMsg('Searching Open Food Facts…');
+    const url='https://world.openfoodfacts.org/cgi/search.pl?search_terms='+encodeURIComponent(q)
+      +'&search_simple=1&action=process&json=1&page_size=8&fields=product_name,brands,nutriments';
+    try{
+      const res=await fetch(url);
+      const j=await res.json();
+      const items=((j&&j.products)||[]).filter(p=>p.product_name && p.nutriments);
+      if(!items.length){ foodMsg('No matches. Try a simpler name, or type the macros in manually.','var(--danger)'); return; }
+      foodMsg('Tap a result to fill macros (scaled to the grams box):');
+      foodResults.innerHTML = items.map((p,i)=>{
+        const m=offMacros(p,100);
+        return `<button class="food-result" data-i="${i}">
+          <div class="food-result-name">${esc(m.name)}</div>
+          <div class="food-result-macros">${m.cal} cal · ${m.p}P ${m.c}C ${m.ft}F per 100g</div>
+        </button>`;
+      }).join('');
+      foodResults.querySelectorAll('[data-i]').forEach(btn=>{
+        btn.addEventListener('click', ()=> fillFromFood(offMacros(items[+btn.dataset.i], +foodGrams.value||100)));
+      });
+    }catch(e){ foodMsg('Search failed ('+(e.message||e)+'). Check your connection or enter macros manually.','var(--danger)'); }
+  }
+
+  // Barcode scan → exact product macros. Uses the browser's built-in
+  // BarcodeDetector (keyless). Falls back to the search box where it
+  // isn't supported (e.g. iOS Safari).
+  const hasBarcode = ('BarcodeDetector' in window);
   scanBtn.addEventListener('click', ()=>{
-    if(!get(APIKEY_KEY,'')){ scanMsg('Paste your Anthropic API key below first — photo scanning uses Claude vision.','var(--danger)'); return; }
+    if(!hasBarcode){ foodMsg('Barcode scanning needs Chrome or Android. Use the search box below instead — same free database.','var(--warn,#F2C063)'); foodQuery.focus(); return; }
     scanInput.click();
   });
-  // Downscale a File to a base64 JPEG (max edge ~1024px) so phone photos
-  // (often several MB) become a small, fast request.
-  function fileToScaledBase64(file){
-    return new Promise((resolve,reject)=>{
-      const img=new Image(); const url=URL.createObjectURL(file);
-      img.onload=()=>{
-        URL.revokeObjectURL(url);
-        const max=1024; let w=img.width, h=img.height;
-        if(w>h && w>max){ h=Math.round(h*max/w); w=max; }
-        else if(h>max){ w=Math.round(w*max/h); h=max; }
-        const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
-        cv.getContext('2d').drawImage(img,0,0,w,h);
-        const dataUrl=cv.toDataURL('image/jpeg',0.8);
-        resolve({ b64: dataUrl.split(',')[1], preview: dataUrl });
-      };
-      img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error('Could not read image')); };
-      img.src=url;
-    });
-  }
   scanInput.addEventListener('change', async ()=>{
     const file=scanInput.files && scanInput.files[0];
-    scanInput.value=''; // allow re-selecting the same file
+    scanInput.value='';
     if(!file) return;
-    const key=get(APIKEY_KEY,'');
-    if(!key){ scanMsg('Add your Anthropic API key below to enable scanning.','var(--danger)'); return; }
-    scanBtn.disabled=true; scanMsg('Reading photo…');
-    let img;
-    try{ img=await fileToScaledBase64(file); }
-    catch(e){ scanMsg('Could not read that image — try another.','var(--danger)'); scanBtn.disabled=false; return; }
-    scanPreview.src=img.preview; scanPreview.style.display='';
-    scanMsg('Cal AI is analyzing the meal…','var(--protein)');
+    scanBtn.disabled=true; foodMsg('Reading barcode…');
     try{
-      const res=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',
-        headers:{ 'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
-        body: JSON.stringify({
-          model: MODEL, max_tokens: 400,
-          system: 'You are Cal AI, a nutrition vision estimator. Identify the food in the image and estimate the TOTAL macros for the full portion shown. Account for visible quantity and typical preparation. Respond with ONLY a JSON object, no prose, no markdown fences: {"name": string, "cal": number, "protein": number, "carbs": number, "fat": number, "confidence": "low"|"medium"|"high", "note": short string}. Numbers are grams except cal (kcal). If unsure, give your best estimate and set confidence accordingly.',
-          messages:[{ role:'user', content:[
-            { type:'image', source:{ type:'base64', media_type:'image/jpeg', data: img.b64 } },
-            { type:'text', text:'Estimate the calories and macros for this meal. Return only the JSON object.' }
-          ]}]
-        })
-      });
+      const bitmap=await createImageBitmap(file);
+      const det=new window.BarcodeDetector({ formats:['ean_13','ean_8','upc_a','upc_e','code_128'] });
+      const codes=await det.detect(bitmap);
+      if(!codes || !codes.length){ foodMsg('No barcode found in that photo. Hold steady on the barcode, or use the search box.','var(--danger)'); scanBtn.disabled=false; return; }
+      const code=codes[0].rawValue;
+      foodMsg('Found barcode '+code+' — looking it up…');
+      const res=await fetch('https://world.openfoodfacts.org/api/v2/product/'+encodeURIComponent(code)+'.json?fields=product_name,brands,nutriments');
       const j=await res.json();
-      if(j && j.error){ scanMsg('API error: '+(j.error.message||'unknown'),'var(--danger)'); scanBtn.disabled=false; return; }
-      const txt=(j && j.content && j.content[0] && j.content[0].text) || '';
-      let data=null;
-      try{ data=JSON.parse(txt.replace(/^```(json)?/i,'').replace(/```$/,'').trim()); }
-      catch(e){ const m=txt.match(/\{[\s\S]*\}/); if(m){ try{ data=JSON.parse(m[0]); }catch(e2){} } }
-      if(!data || typeof data!=='object'){ scanMsg('Could not parse the estimate — try a clearer photo or log it manually.','var(--danger)'); scanBtn.disabled=false; return; }
-      document.getElementById('mName').value=data.name||'Scanned meal';
-      document.getElementById('mCal').value=Math.round(+data.cal||0);
-      document.getElementById('mP').value=Math.round(+data.protein||0);
-      document.getElementById('mC').value=Math.round(+data.carbs||0);
-      document.getElementById('mF').value=Math.round(+data.fat||0);
-      const conf=(data.confidence||'').toString();
-      scanMsg('✓ '+(data.name||'Meal')+': '+Math.round(+data.cal||0)+' cal · '+Math.round(+data.protein||0)+'P '+Math.round(+data.carbs||0)+'C '+Math.round(+data.fat||0)+'F'
-        +(conf?(' · '+conf+' confidence'):'')+'. Review the numbers, then tap “+ Add meal.”'
-        +(data.note?('  ('+data.note+')'):''), 'var(--protein)');
+      if(!j || j.status===0 || !j.product || !j.product.nutriments){ foodMsg('Barcode '+code+' isn\'t in the food database. Try the search box instead.','var(--danger)'); scanBtn.disabled=false; return; }
+      fillFromFood(offMacros(j.product, +foodGrams.value||100));
     }catch(e){
-      scanMsg('Could not reach Claude vision ('+(e.message||e)+'). Log manually instead.','var(--danger)');
+      foodMsg('Couldn\'t scan that image ('+(e.message||e)+'). Use the search box instead.','var(--danger)');
     }
     scanBtn.disabled=false;
   });
@@ -314,61 +330,18 @@ Red flags: weight stalled 3+ wks -> +200 cal; protein missing by >20g -> push pr
     set(WEIGHTS_KEY,w); document.getElementById('wVal').value=''; renderWeights();
   });
 
-  const keyInput=document.getElementById('apiKey');
-  keyInput.value = get(APIKEY_KEY,'') || '';
-  document.getElementById('saveKey').addEventListener('click', ()=>{
-    set(APIKEY_KEY, (keyInput.value||'').trim());
-    const el=document.getElementById('aiOut'); el.classList.remove('empty'); el.textContent='✓ Key saved on this device. AI coaching enabled.';
-  });
-
   document.querySelectorAll('[data-act]').forEach(btn=>{
     btn.addEventListener('click', ()=> runCoach(btn.dataset.act));
   });
 
-  async function runCoach(action){
+  // Fully on-device coach — no API key, no network. Computes directly
+  // from your logged meals + weigh-ins.
+  function runCoach(action){
     const out=document.getElementById('aiOut');
     const meals=loadMeals(), t=totals(meals);
     const weights=get(WEIGHTS_KEY,[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
-    const key=get(APIKEY_KEY,'');
-
-    let userMessage='';
-    if(action==='analyze_today'){
-      userMessage = `Action: analyze_today.\nToday's meal log: ${JSON.stringify(meals.map(m=>({name:m.name,cal:m.cal,protein:m.p,carbs:m.c,fat:m.f})))}\nRunning totals: ${Math.round(t.cal)} cal, ${Math.round(t.p)}g protein, ${Math.round(t.c)}g carbs, ${Math.round(t.f)}g fat.`;
-    } else if(action==='suggest_meals'){
-      const rem={cal:TARGET.cal-t.cal,p:TARGET.p-t.p,c:TARGET.c-t.c,f:TARGET.f-t.f};
-      userMessage = `Action: suggest_meals. Remaining today: ${Math.round(rem.cal)} cal, ${Math.round(rem.p)}g protein, ${Math.round(rem.c)}g carbs, ${Math.round(rem.f)}g fat. Suggest 3 home-cooked meals to help close this.`;
-    } else {
-      userMessage = `Action: weekly_review. Weigh-ins (date, lb): ${JSON.stringify(weights.slice(-14))}. Target +${WEEKLY_GAIN} lb/week toward ${GOAL_WEIGHT} lb.`;
-    }
-
-    if(!key){
-      out.classList.remove('empty');
-      out.textContent = localCoach(action, meals, t, weights);
-      return;
-    }
-
-    out.classList.remove('empty'); out.textContent='Cal AI is thinking…';
-    try{
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST',
-        headers:{
-          'content-type':'application/json',
-          'x-api-key':key,
-          'anthropic-version':'2023-06-01',
-          'anthropic-dangerous-direct-browser-access':'true'
-        },
-        body: JSON.stringify({
-          model: MODEL, max_tokens: 700, system: CAL_AI_PROMPT,
-          messages:[{ role:'user', content: userMessage }]
-        })
-      });
-      const j = await res.json();
-      if(j && j.content && j.content[0] && j.content[0].text){ out.textContent = j.content[0].text.trim(); }
-      else if(j && j.error){ out.textContent = 'API error: '+(j.error.message||'unknown')+'\n\n— Falling back to local calculator —\n\n'+localCoach(action,meals,t,weights); }
-      else { out.textContent = localCoach(action,meals,t,weights); }
-    }catch(e){
-      out.textContent = 'Could not reach Claude ('+(e.message||e)+').\n\n— Local calculator —\n\n'+localCoach(action,meals,t,weights);
-    }
+    out.classList.remove('empty');
+    out.textContent = localCoach(action, meals, t, weights);
   }
 
   function localCoach(action, meals, t, weights){
